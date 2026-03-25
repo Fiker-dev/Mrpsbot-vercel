@@ -1,0 +1,24 @@
+{
+  "name": "mrpsbot-vercel",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fiker-dev/Mrpsbot-vercel.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Fiker-dev/Mrpsbot-vercel/issues"
+  },
+  "homepage": "https://github.com/Fiker-dev/Mrpsbot-vercel#readme",
+  "dependencies": {
+    "@vercel/kv": "^3.0.0"
+  }
+}
