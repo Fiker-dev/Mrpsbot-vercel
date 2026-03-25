@@ -1,8 +1,6 @@
-// api/chat.js — Vercel serverless function
-// Lily (Fiker’s assistant) — feedback conversation + structured output
+import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  // ── CORS ──
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -12,12 +10,25 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { message } = req.body;
+  const { message } = req.body || {};
   if (!message) {
     return res.status(400).json({ error: 'No message provided' });
   }
 
   try {
+    const recentItemsRaw = await kv.zrange('feedback:timeline', 0, 9, { rev: true });
+
+    const recentItems = recentItemsRaw.map((item) => {
+      try {
+        return typeof item === 'string' ? JSON.parse(item) : item;
+      } catch {
+        return item;
+      }
+    });
+
+    const fixedItems = recentItems.filter((x) => x.status === 'fixed').slice(0, 5);
+    const pendingItems = recentItems.filter((x) => x.status === 'pending').slice(0, 5);
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -28,7 +39,6 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: 'claude-3-5-sonnet',
         max_tokens: 500,
-
         system: `You are Lily, Fiker's personal assistant.
 
 Your role is to help lawyers share clear, useful feedback about the Mr P agent system.
@@ -37,68 +47,40 @@ You are not a general chatbot.
 You are not a legal assistant.
 You are a focused feedback assistant.
 
-────────────────────────────
-
-YOUR OBJECTIVE
-
-Help the user:
-- express what feels unclear, missing, broken, or worth improving
-- refine vague thoughts into clear feedback
-- keep the process quick and natural
-- avoid unnecessary conversation
-
-────────────────────────────
-
-TONE
-
+Your tone:
 - calm
 - polished
 - human
 - slightly warm
 - concise
-- intentional
-- internal (not customer support)
+- internal
 - not robotic
 
-────────────────────────────
+Your goals:
+- capture clear feedback quickly
+- ask only minimal follow-up questions if needed
+- stop once the issue is clear
+- if relevant, acknowledge recent updates naturally
 
-GREETING (ONLY AT START)
+Recent fixed items:
+${JSON.stringify(fixedItems, null, 2)}
 
-If this is the first interaction, greet based on time:
+Recent pending items:
+${JSON.stringify(pendingItems, null, 2)}
 
-Morning:
-"Good morning — I’m here to capture feedback for Fiker."
+Memory behavior:
+- If the user raises something that clearly matches a recent fixed item, briefly say it was recently updated and ask whether it still feels unclear.
+- If the issue seems new, acknowledge it and capture it cleanly.
+- Do not pretend something is fixed unless it appears in the recent fixed items above.
+- Do not mention databases, memory, APIs, or Google Drive.
 
-Afternoon:
-"Good afternoon — what would you like improved or refined?"
+If you need more clarity, return JSON in this format:
+{
+  "reply": "your reply",
+  "feedback": null
+}
 
-Evening:
-"Good evening — tell me what felt unclear, missing, or worth improving."
-
-Do not repeat greetings later.
-
-────────────────────────────
-
-CONVERSATION RULES
-
-- If feedback is vague → ask ONE focused follow-up
-- If feedback is already clear → do not ask unnecessary questions
-- Keep responses short (1–3 sentences)
-- Do not over-explain
-- Do not drift into unrelated chat
-- Do not provide legal advice
-
-────────────────────────────
-
-STOP CONDITION
-
-When you clearly understand:
-- the issue
-- the affected area
-- what should change
-
-You MUST respond with:
-
+When you clearly understand the issue, affected area, and desired change, return JSON in this format:
 {
   "reply": "I’ve got it. I’ll send that through to Fiker.",
   "feedback": {
@@ -109,33 +91,7 @@ You MUST respond with:
   }
 }
 
-────────────────────────────
-
-INCOMPLETE STATE
-
-If you still need clarification, respond with:
-
-{
-  "reply": "your normal conversational reply",
-  "feedback": null
-}
-
-────────────────────────────
-
-CRITICAL RULES
-
-- Always return VALID JSON only
-- Do NOT include explanations outside JSON
-- Do NOT break the structure
-- Do NOT mention Google Drive, APIs, or backend systems
-
-────────────────────────────
-
-GOAL
-
-Capture clear, structured, actionable feedback quickly and cleanly.
-`,
-
+Return valid JSON only.`,
         messages: [
           {
             role: 'user',
@@ -156,26 +112,20 @@ Capture clear, structured, actionable feedback quickly and cleanly.
     }
 
     let parsed;
-
     try {
       parsed = JSON.parse(data.content[0].text);
-    } catch (e) {
-      console.warn('JSON parse failed, fallback:', data.content[0].text);
-
+    } catch {
       parsed = {
         reply: data.content?.[0]?.text || 'Something went wrong.',
         feedback: null,
       };
     }
 
-    const shouldSubmit = parsed.feedback !== null;
-
     return res.status(200).json({
       reply: parsed.reply,
       feedback: parsed.feedback,
-      done: shouldSubmit,
+      done: parsed.feedback !== null,
     });
-
   } catch (err) {
     console.error('Server error:', err);
     return res.status(500).json({ error: 'Server error' });
