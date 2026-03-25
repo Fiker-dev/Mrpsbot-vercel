@@ -1,7 +1,5 @@
-// api/feedback.js — Vercel serverless function
-// Receives feedback and saves it as a Google Doc in your Drive folder
-
 import { google } from 'googleapis';
+import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,11 +9,48 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { message, source } = req.body;
+  const { message, source, email = null } = req.body || {};
   if (!message) return res.status(400).json({ error: 'No message provided' });
 
   try {
-    // ── Authenticate with Google using service account ──
+    let parsed;
+    try {
+      parsed = JSON.parse(message);
+    } catch {
+      parsed = {
+        summary: message,
+        area: 'General',
+        issue: message,
+        suggested_change: '',
+      };
+    }
+
+    const now = new Date();
+    const iso = now.toISOString();
+    const localTime = now.toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' });
+
+    const memoryId = crypto.randomUUID();
+    const memoryRecord = {
+      id: memoryId,
+      summary: parsed.summary || '',
+      area: parsed.area || 'General',
+      issue: parsed.issue || '',
+      suggested_change: parsed.suggested_change || '',
+      raw_feedback: message,
+      source: source || 'Page',
+      email,
+      status: 'pending',
+      created_at: iso,
+      updated_at: iso,
+      fixed_note: '',
+    };
+
+    await kv.set(`feedback:${memoryId}`, memoryRecord);
+    await kv.zadd('feedback:timeline', {
+      score: Date.now(),
+      member: JSON.stringify(memoryRecord),
+    });
+
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
     const auth = new google.auth.GoogleAuth({
@@ -25,15 +60,37 @@ export default async function handler(req, res) {
 
     const drive = google.drive({ version: 'v3', auth });
 
-    // ── Create a text file in your MRP Feedback folder ──
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `Feedback_${timestamp}.txt`;
-    const content = `MR P AGENT FEEDBACK\n${'─'.repeat(40)}\nDate: ${new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' })}\nSource: ${source || 'Page'}\n\n${message}\n`;
+    const filename = `Feedback_${iso.replace(/[:.]/g, '-')}.txt`;
+    const content = [
+      'MR P AGENT FEEDBACK',
+      '────────────────────────────────────────',
+      `Memory ID: ${memoryId}`,
+      `Date: ${localTime}`,
+      `Source: ${source || 'Page'}`,
+      `Email: ${email || 'Not provided'}`,
+      'Status: pending',
+      '',
+      'Summary:',
+      parsed.summary || '',
+      '',
+      'Area:',
+      parsed.area || 'General',
+      '',
+      'Issue:',
+      parsed.issue || '',
+      '',
+      'Suggested Change:',
+      parsed.suggested_change || '',
+      '',
+      'Raw Feedback:',
+      message,
+      '',
+    ].join('\n');
 
     await drive.files.create({
       requestBody: {
         name: filename,
-        parents: [process.env.GOOGLE_DRIVE_FOLDER_ID], // your MRP Feedback folder ID
+        parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
         mimeType: 'text/plain',
       },
       media: {
@@ -42,9 +99,9 @@ export default async function handler(req, res) {
       },
     });
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, id: memoryId });
   } catch (err) {
-    console.error('Drive error:', err);
+    console.error('Drive/Memory error:', err);
     return res.status(500).json({ error: 'Could not save feedback' });
   }
 }
