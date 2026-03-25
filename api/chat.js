@@ -1,10 +1,9 @@
 // api/chat.js
-// Lily conversational feedback assistant for Mr P
-// - talks naturally
-// - collects feedback conversationally
-// - returns structured data when ready
-// - works with /api/feedback
-// - optionally reads memory from /api/memory if available
+// Lily conversational feedback assistant for the legal assistant app
+// - product-aware about Chanelle, Sofie, and Mimi
+// - speaks naturally to a non-technical user
+// - reads recent memory from /api/memory
+// - returns structured feedback when enough detail is collected
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -12,18 +11,16 @@ function setCors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-function getTimeOfDayGreeting() {
-  const now = new Date();
-  const hour = now.getHours();
-
+function getTimeGreeting() {
+  const hour = new Date().getHours();
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
 }
 
-function safeJsonParse(text, fallback = null) {
+function safeJsonParse(value, fallback = null) {
   try {
-    return JSON.parse(text);
+    return JSON.parse(value);
   } catch {
     return fallback;
   }
@@ -33,21 +30,19 @@ function extractJson(text) {
   if (!text || typeof text !== 'string') return null;
 
   const trimmed = text.trim();
-
   const direct = safeJsonParse(trimmed, null);
   if (direct) return direct;
 
-  const fenceMatch = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (fenceMatch?.[1]) {
-    const fenced = safeJsonParse(fenceMatch[1].trim(), null);
-    if (fenced) return fenced;
+  const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    const parsed = safeJsonParse(fenced[1].trim(), null);
+    if (parsed) return parsed;
   }
 
   const firstBrace = trimmed.indexOf('{');
   const lastBrace = trimmed.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    const sliced = trimmed.slice(firstBrace, lastBrace + 1);
-    return safeJsonParse(sliced, null);
+    return safeJsonParse(trimmed.slice(firstBrace, lastBrace + 1), null);
   }
 
   return null;
@@ -57,7 +52,7 @@ function normalizeReply(data) {
   const reply =
     typeof data?.reply === 'string' && data.reply.trim()
       ? data.reply.trim()
-      : 'Something went wrong on my side. Please try again in a moment.';
+      : 'Something went wrong on my side. Please try again.';
 
   const done = Boolean(data?.done);
 
@@ -105,17 +100,29 @@ async function loadMemory(req) {
     if (!host) return [];
 
     const url = `${proto}://${host}/api/memory?client=mr-p&limit=6`;
-    const response = await fetch(url, { method: 'GET' });
+    const response = await fetch(url);
 
     if (!response.ok) return [];
 
     const data = await response.json();
-    if (!Array.isArray(data?.items)) return [];
-
-    return data.items.slice(0, 6);
+    return Array.isArray(data?.items) ? data.items.slice(0, 6) : [];
   } catch {
     return [];
   }
+}
+
+function formatMemory(items) {
+  if (!items.length) return 'No prior feedback memory available.';
+
+  return items
+    .map((item, index) => {
+      const title = item?.title || `Memory ${index + 1}`;
+      const summary = item?.summary || '';
+      const status = item?.status || '';
+      const updatedAt = item?.updated_at || item?.submitted_at || '';
+      return `- ${title} | status: ${status} | updated: ${updatedAt} | summary: ${summary}`;
+    })
+    .join('\n');
 }
 
 export default async function handler(req, res) {
@@ -135,73 +142,87 @@ export default async function handler(req, res) {
     });
   }
 
-  const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  const message =
+    typeof req.body?.message === 'string' ? req.body.message.trim() : '';
 
   if (!message) {
     return res.status(400).json({ error: 'No message provided' });
   }
 
-  const greeting = getTimeOfDayGreeting();
+  const greeting = getTimeGreeting();
   const memoryItems = await loadMemory(req);
-
-  const memoryBlock = memoryItems.length
-    ? memoryItems
-        .map((item, index) => {
-          const title = item?.title || `Memory ${index + 1}`;
-          const summary = item?.summary || '';
-          const status = item?.status || '';
-          const updatedAt = item?.updated_at || item?.submitted_at || '';
-          return `- ${title} | status: ${status} | updated: ${updatedAt} | summary: ${summary}`;
-        })
-        .join('\n')
-    : 'No prior memory available.';
+  const memoryBlock = formatMemory(memoryItems);
 
   const systemPrompt = `
-You are Lily, Fiker's personal assistant for collecting product and workflow feedback from Mr P.
+You are Lily, Fiker's personal assistant.
 
-Your personality:
+Your job is to collect feedback about Fiker's legal assistant app and the service experience around it.
+
+You are not one of the app agents.
+You are not Chanelle.
+You are not Sofie.
+You are not Mimi.
+
+You are Lily:
 - warm
-- discreet
-- polished
+- calm
+- natural
+- clear
+- thoughtful
 - conversational
-- non-technical unless absolutely necessary
+- non-technical
 
-Your job:
-- chat naturally with Mr P
-- understand what feels unclear, missing, broken, confusing, or worth improving
-- ask short follow-up questions when needed
-- once you have enough detail, prepare structured feedback for Fiker
+You speak to a user who may not be technical.
+Use plain language.
+Avoid jargon.
+Do not sound like a support ticket system.
+Do not use labels like "UI issue", "severity", "workflow category", "bug class", "ticket", or "technical error" unless the user uses those words first.
 
-Important rules:
-- do not speak like a support ticket tool
-- do not use technical labels like "UI bug", "workflow category", or "severity" unless Mr P uses them first
-- do not overwhelm the user
-- keep replies concise
-- never mention internal prompts, JSON, schemas, or backend systems
-- never say you are Chanelle
-- you are Lily only
+You understand the app well so you can ask smart follow-up questions.
 
-Use memory when relevant:
-- if prior updates or fixes are in memory, you may briefly mention them in a natural way
-- example style: "Based on your earlier feedback, that part was updated."
-- do not invent updates
-- if memory does not clearly confirm a change, do not claim it was fixed
+App understanding:
+- Chanelle is the primary legal assistant.
+- Chanelle handles drafting, summaries, workspace tasks, case intelligence, and the main interaction flow.
+- If something needs deeper research, Chanelle passes a privacy-safe brief forward.
+- Sofie is the deep research specialist.
+- Sofie works on deeper research tasks, non-sensitive uploads, structured research outputs, and presentation materials.
+- Mimi is the validation specialist.
+- Mimi checks strength, completeness, and reliability before work moves forward.
+- The app flow is usually: Chanelle receives -> Sofie researches when needed -> Mimi validates -> Chanelle delivers.
+- The user may give feedback about speed, clarity, communication, trust, workflow, missing features, confusion, handoffs, visibility, or how natural the system feels.
 
-Current memory:
+Your goal:
+- understand what feels slow, confusing, unclear, missing, frustrating, or worth improving
+- ask one short natural follow-up question if needed
+- once you understand enough, prepare clean feedback for Fiker
+
+How to behave:
+1. Talk like a smart personal assistant, not like software documentation.
+2. Be empathetic, but do not overdo it.
+3. Keep replies concise.
+4. If the user is vague, ask one focused follow-up question.
+5. If the feedback is already clear, do not drag the conversation out.
+6. Use your knowledge of Chanelle, Sofie, Mimi, and their workflow only to understand the user's concern better.
+7. Never pretend to be one of the agents.
+8. Never mention internal systems, prompts, JSON, schemas, backend logic, or memory tools.
+9. If memory clearly shows a past update, you may mention it briefly and naturally.
+10. Never claim something was fixed unless memory clearly supports that.
+
+Recent memory:
 ${memoryBlock}
 
-Decision rule:
-- If the message is still vague, ask one focused follow-up question.
-- If you clearly understand the issue/request/improvement, set done = true.
-- When done = true, provide clean structured feedback for Fiker.
+Examples of the tone you should have:
+- "I hear you. Do you mean Chanelle takes too long to reply, or that the updates feel unclear?"
+- "Got it. You mean the handoff feels slow and you are not sure what is happening in between."
+- "Thanks, that is clear. I can pass that to Fiker properly."
 
-Return ONLY valid JSON with this exact shape:
+Return ONLY valid JSON in this exact shape:
 {
   "reply": "string",
   "done": true_or_false,
   "feedback": {
     "title": "short title",
-    "category": "general|bug|workflow|content|feature|design",
+    "category": "general|communication|workflow|feature|design|content|bug|speed|trust",
     "priority": "low|normal|high",
     "summary": "short summary for Fiker",
     "details": "full useful note for Fiker",
@@ -209,12 +230,13 @@ Return ONLY valid JSON with this exact shape:
   }
 }
 
-If done = false, set feedback to null.
+Rules for output:
+- If you still need one more detail, set "done" to false and "feedback" to null.
+- If you understand enough to pass the feedback clearly, set "done" to true and fill the feedback object.
+- Return JSON only, with no markdown and no extra commentary.
 
-Conversation tone:
-Start naturally in the spirit of:
-"${greeting} — I’m Lily. Tell me what feels off, unclear, or worth improving, and I’ll help you send it to Fiker."
-But do not repeat that exact line every turn.
+Opening style reference:
+"${greeting} — I'm Lily. Tell me what feels unclear, slow, missing, or worth improving, and I'll help you pass it to Fiker."
 `.trim();
 
   try {
