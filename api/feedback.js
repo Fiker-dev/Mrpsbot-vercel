@@ -7,49 +7,60 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   const { message, source, email = null } = req.body || {};
-  if (!message) return res.status(400).json({ error: 'No message provided' });
+
+  if (!message) {
+    return res.status(400).json({ error: 'No message provided' });
+  }
 
   try {
     let parsed;
     try {
-      parsed = JSON.parse(message);
+      parsed = typeof message === 'string' ? JSON.parse(message) : message;
     } catch {
       parsed = {
-        summary: message,
+        summary: String(message),
         area: 'General',
-        issue: message,
+        issue: String(message),
         suggested_change: '',
       };
     }
 
     const now = new Date();
     const iso = now.toISOString();
-    const localTime = now.toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' });
+    const localTime = now.toLocaleString('en-ZA', {
+      timeZone: 'Africa/Johannesburg',
+    });
 
-    const memoryId = crypto.randomUUID();
-    const memoryRecord = {
-      id: memoryId,
+    const feedbackId = crypto.randomUUID();
+
+    const record = {
+      id: feedbackId,
       summary: parsed.summary || '',
       area: parsed.area || 'General',
       issue: parsed.issue || '',
       suggested_change: parsed.suggested_change || '',
-      raw_feedback: message,
+      raw_feedback: typeof message === 'string' ? message : JSON.stringify(message),
       source: source || 'Page',
       email,
       status: 'pending',
       created_at: iso,
       updated_at: iso,
       fixed_note: '',
+      fixed_at: null,
+      resolved_by: null,
     };
 
-    await kv.set(`feedback:${memoryId}`, memoryRecord);
-    await kv.zadd('feedback:timeline', {
-      score: Date.now(),
-      member: JSON.stringify(memoryRecord),
-    });
+    // Save structured memory for Lily
+    await kv.lpush('feedback_memory', JSON.stringify(record));
+    await kv.ltrim('feedback_memory', 0, 49);
+
+    // Save individually for future dev-agent updates
+    await kv.set(`feedback:${feedbackId}`, record);
 
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
@@ -61,29 +72,30 @@ export default async function handler(req, res) {
     const drive = google.drive({ version: 'v3', auth });
 
     const filename = `Feedback_${iso.replace(/[:.]/g, '-')}.txt`;
+
     const content = [
       'MR P AGENT FEEDBACK',
       '────────────────────────────────────────',
-      `Memory ID: ${memoryId}`,
+      `Feedback ID: ${feedbackId}`,
       `Date: ${localTime}`,
       `Source: ${source || 'Page'}`,
       `Email: ${email || 'Not provided'}`,
-      'Status: pending',
+      `Status: pending`,
       '',
       'Summary:',
-      parsed.summary || '',
+      record.summary,
       '',
       'Area:',
-      parsed.area || 'General',
+      record.area,
       '',
       'Issue:',
-      parsed.issue || '',
+      record.issue,
       '',
       'Suggested Change:',
-      parsed.suggested_change || '',
+      record.suggested_change,
       '',
       'Raw Feedback:',
-      message,
+      record.raw_feedback,
       '',
     ].join('\n');
 
@@ -99,9 +111,12 @@ export default async function handler(req, res) {
       },
     });
 
-    return res.status(200).json({ success: true, id: memoryId });
+    return res.status(200).json({
+      success: true,
+      id: feedbackId,
+    });
   } catch (err) {
-    console.error('Drive/Memory error:', err);
+    console.error('Feedback save error:', err);
     return res.status(500).json({ error: 'Could not save feedback' });
   }
 }
