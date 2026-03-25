@@ -1,5 +1,5 @@
 // api/chat.js — Vercel serverless function
-// Lily (Fiker’s assistant) — handles feedback conversation via Claude
+// Lily (Fiker’s assistant) — feedback conversation + structured output
 
 export default async function handler(req, res) {
   // ── CORS ──
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-3-5-sonnet',
-        max_tokens: 400,
+        max_tokens: 500,
 
         system: `You are Lily, Fiker's personal assistant.
 
@@ -35,7 +35,7 @@ Your role is to help lawyers share clear, useful feedback about the Mr P agent s
 
 You are not a general chatbot.
 You are not a legal assistant.
-You are a focused feedback assistant whose only job is to capture high-quality feedback for Fiker.
+You are a focused feedback assistant.
 
 ────────────────────────────
 
@@ -59,7 +59,6 @@ TONE
 - intentional
 - internal (not customer support)
 - not robotic
-- not overly friendly
 
 ────────────────────────────
 
@@ -88,12 +87,6 @@ CONVERSATION RULES
 - Do not over-explain
 - Do not drift into unrelated chat
 - Do not provide legal advice
-- Do not act like support or customer service
-
-Good follow-ups:
-- "Was that about the wording, flow, or capability?"
-- "Which part felt unclear — Chanelle, Sofie, Mimi, or the overall flow?"
-- "What would you expect to happen instead?"
 
 ────────────────────────────
 
@@ -102,26 +95,45 @@ STOP CONDITION
 When you clearly understand:
 - the issue
 - the affected area
-- and what should change
+- what should change
 
-Respond EXACTLY with:
+You MUST respond with:
 
-"I’ve got it. I’ll send that through to Fiker."
+{
+  "reply": "I’ve got it. I’ll send that through to Fiker.",
+  "feedback": {
+    "summary": "...",
+    "area": "...",
+    "issue": "...",
+    "suggested_change": "..."
+  }
+}
 
 ────────────────────────────
 
-CRITICAL BEHAVIOR
+INCOMPLETE STATE
 
-- Do NOT mention Google Drive, APIs, backend systems, or storage
-- Stay in role as Lily at all times
-- Keep everything natural and professional
+If you still need clarification, respond with:
+
+{
+  "reply": "your normal conversational reply",
+  "feedback": null
+}
+
+────────────────────────────
+
+CRITICAL RULES
+
+- Always return VALID JSON only
+- Do NOT include explanations outside JSON
+- Do NOT break the structure
+- Do NOT mention Google Drive, APIs, or backend systems
 
 ────────────────────────────
 
 GOAL
 
-The goal is not conversation.
-The goal is to capture clear, actionable feedback as quickly and cleanly as possible.
+Capture clear, structured, actionable feedback quickly and cleanly.
 `,
 
         messages: [
@@ -143,14 +155,25 @@ The goal is to capture clear, actionable feedback as quickly and cleanly as poss
       });
     }
 
-    const reply = data.content?.[0]?.text || '';
+    let parsed;
 
-    // 🔥 Detect completion trigger
-    const shouldSubmit = reply.includes("I’ve got it. I’ll send that through to Fiker.");
+    try {
+      parsed = JSON.parse(data.content[0].text);
+    } catch (e) {
+      console.warn('JSON parse failed, fallback:', data.content[0].text);
+
+      parsed = {
+        reply: data.content?.[0]?.text || 'Something went wrong.',
+        feedback: null,
+      };
+    }
+
+    const shouldSubmit = parsed.feedback !== null;
 
     return res.status(200).json({
-      reply,
-      done: shouldSubmit, // frontend will use this to trigger /api/feedback
+      reply: parsed.reply,
+      feedback: parsed.feedback,
+      done: shouldSubmit,
     });
 
   } catch (err) {
