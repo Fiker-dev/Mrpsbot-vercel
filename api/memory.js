@@ -28,7 +28,7 @@ export default async function handler(req, res) {
         suggested_change = '',
         raw_feedback = '',
         source = 'unknown',
-        email = null
+        email = null,
       } = req.body || {};
 
       if (!summary || !area || !issue) {
@@ -50,13 +50,13 @@ export default async function handler(req, res) {
         status: 'pending',
         created_at: now,
         updated_at: now,
-        fixed_note: ''
+        fixed_note: '',
       };
 
       await kv.set(`feedback:${id}`, record);
       await kv.zadd('feedback:timeline', {
         score: Date.now(),
-        member: JSON.stringify(record)
+        member: JSON.stringify(record),
       });
 
       return res.status(200).json({ success: true, record });
@@ -78,7 +78,7 @@ export default async function handler(req, res) {
         ...existing,
         status,
         fixed_note,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       };
 
       await kv.set(`feedback:${id}`, updated);
