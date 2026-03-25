@@ -1,5 +1,17 @@
 import { kv } from '@vercel/kv';
 
+function getGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) {
+    return "Good morning — I’m here to capture feedback for Fiker.";
+  }
+  if (hour < 18) {
+    return "Good afternoon — what would you like improved or refined?";
+  }
+  return "Good evening — tell me what felt unclear, missing, or worth improving.";
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -11,14 +23,16 @@ export default async function handler(req, res) {
   }
 
   const { message } = req.body || {};
-  if (!message) {
+
+  if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'No message provided' });
   }
 
   try {
-    const recentItemsRaw = await kv.zrange('feedback:timeline', 0, 9, { rev: true });
+    const recentFeedbackRaw = await kv.lrange('feedback_memory', 0, 9);
+    const recentResolvedRaw = await kv.lrange('resolved_updates', 0, 9);
 
-    const recentItems = recentItemsRaw.map((item) => {
+    const recentFeedback = (recentFeedbackRaw || []).map((item) => {
       try {
         return typeof item === 'string' ? JSON.parse(item) : item;
       } catch {
@@ -26,8 +40,13 @@ export default async function handler(req, res) {
       }
     });
 
-    const fixedItems = recentItems.filter((x) => x.status === 'fixed').slice(0, 5);
-    const pendingItems = recentItems.filter((x) => x.status === 'pending').slice(0, 5);
+    const recentResolved = (recentResolvedRaw || []).map((item) => {
+      try {
+        return typeof item === 'string' ? JSON.parse(item) : item;
+      } catch {
+        return item;
+      }
+    });
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -41,7 +60,7 @@ export default async function handler(req, res) {
         max_tokens: 500,
         system: `You are Lily, Fiker's personal assistant.
 
-Your role is to help lawyers share clear, useful feedback about the Mr P agent system.
+You help lawyers share clear, useful feedback about the Mr P agent system.
 
 You are not a general chatbot.
 You are not a legal assistant.
@@ -55,32 +74,35 @@ Your tone:
 - concise
 - internal
 - not robotic
+- not salesy
 
-Your goals:
-- capture clear feedback quickly
-- ask only minimal follow-up questions if needed
-- stop once the issue is clear
-- if relevant, acknowledge recent updates naturally
+Current greeting to use only if the user is just opening or starting:
+"${getGreeting()}"
 
-Recent fixed items:
-${JSON.stringify(fixedItems, null, 2)}
+Recent feedback memory:
+${JSON.stringify(recentFeedback, null, 2)}
 
-Recent pending items:
-${JSON.stringify(pendingItems, null, 2)}
+Recent resolved updates:
+${JSON.stringify(recentResolved, null, 2)}
 
-Memory behavior:
-- If the user raises something that clearly matches a recent fixed item, briefly say it was recently updated and ask whether it still feels unclear.
-- If the issue seems new, acknowledge it and capture it cleanly.
-- Do not pretend something is fixed unless it appears in the recent fixed items above.
-- Do not mention databases, memory, APIs, or Google Drive.
+Behavior rules:
+- If the user gives feedback, help clarify it briefly.
+- Ask only one focused follow-up if needed.
+- If the feedback is already clear, do not ask unnecessary questions.
+- If something similar appears in resolved updates, you may briefly say it was recently improved and ask whether it still feels unclear.
+- If something similar appears in feedback memory but not resolved updates, you may briefly acknowledge that it is already being worked on.
+- Do not claim something is fixed unless it appears in resolved updates.
+- Do not mention Google Drive, APIs, databases, memory systems, or backend infrastructure.
+- Keep replies short and natural.
+- Do not provide legal advice.
 
-If you need more clarity, return JSON in this format:
+When feedback is still incomplete, return VALID JSON ONLY in this format:
 {
-  "reply": "your reply",
+  "reply": "your reply here",
   "feedback": null
 }
 
-When you clearly understand the issue, affected area, and desired change, return JSON in this format:
+When feedback is clear enough to submit, return VALID JSON ONLY in this format:
 {
   "reply": "I’ve got it. I’ll send that through to Fiker.",
   "feedback": {
@@ -91,7 +113,7 @@ When you clearly understand the issue, affected area, and desired change, return
   }
 }
 
-Return valid JSON only.`,
+Never return anything outside valid JSON.`,
         messages: [
           {
             role: 'user',
@@ -112,18 +134,20 @@ Return valid JSON only.`,
     }
 
     let parsed;
+
     try {
-      parsed = JSON.parse(data.content[0].text);
-    } catch {
+      parsed = JSON.parse(data.content?.[0]?.text || '{}');
+    } catch (err) {
+      console.warn('Failed to parse Claude JSON:', data.content?.[0]?.text);
       parsed = {
-        reply: data.content?.[0]?.text || 'Something went wrong.',
+        reply: 'Something went wrong — please try again.',
         feedback: null,
       };
     }
 
     return res.status(200).json({
-      reply: parsed.reply,
-      feedback: parsed.feedback,
+      reply: parsed.reply || 'Something went wrong — please try again.',
+      feedback: parsed.feedback || null,
       done: parsed.feedback !== null,
     });
   } catch (err) {
