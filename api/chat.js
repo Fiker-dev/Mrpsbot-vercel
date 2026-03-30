@@ -46,7 +46,6 @@ module.exports = async function handler(req, res) {
     const complaint = extractComplaint(message, combinedLower);
     const clarificationCount = countAssistantClarifications(history);
 
-    // Immediate submit / stop clarifying rules
     if (isImmediateSubmit(lower)) {
       const feedback = buildFeedbackSummary({
         clientId,
@@ -63,7 +62,6 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // Greeting only
     if (isGreetingOnly(lower)) {
       return res.status(200).json({
         reply: `${getTimeGreeting()}, Mr P. I’m well, thank you. Do you have any feedback for me today?`,
@@ -71,7 +69,6 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // Small talk
     if (isSmallTalk(lower)) {
       return res.status(200).json({
         reply: buildSmallTalkReply(lower),
@@ -79,7 +76,6 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // If the message itself is already clear enough to summarize, offer direct pass
     if (hasEnoughToSummarize(complaint)) {
       if (clarificationCount >= 2) {
         const feedbackPreview = buildFeedbackSummary({
@@ -97,7 +93,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const followUp = makeFollowUpQuestion(complaint, clarificationCount);
+      const followUp = makeFollowUpQuestion(complaint, clarificationCount, lower, historyLower);
       if (followUp) {
         return res.status(200).json({
           reply: followUp,
@@ -120,9 +116,8 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // Vague feedback: one short question only
     return res.status(200).json({
-      reply: makeFallbackClarification(complaint),
+      reply: makeFallbackClarification(complaint, lower, historyLower),
       done: false,
     });
   } catch (err) {
@@ -242,6 +237,7 @@ function isImmediateSubmit(lower) {
     "just tell what i said to fiker that's all",
     'pass it on',
     'just pass it on',
+    'pass it',
     'send it',
     'send this',
     'log it',
@@ -302,11 +298,11 @@ function countAssistantClarifications(history) {
 function hasEnoughToSummarize(complaint) {
   return Boolean(
     complaint.agent ||
-      complaint.categories.length ||
-      complaint.issues.length ||
-      complaint.taskAttempted ||
-      complaint.whatHappened ||
-      complaint.expectedBehavior
+    complaint.categories.length ||
+    complaint.issues.length ||
+    complaint.taskAttempted ||
+    complaint.whatHappened ||
+    complaint.expectedBehavior
   );
 }
 
@@ -322,7 +318,6 @@ function extractComplaint(message, combinedLower) {
   const issues = [];
   const summaryBits = [];
 
-  // categories
   if (
     includesAny(combinedLower, [
       'answer',
@@ -370,7 +365,6 @@ function extractComplaint(message, combinedLower) {
     categories.push('trust/privacy');
   }
 
-  // issues
   if (includesAny(combinedLower, ['slow', 'takes too long', 'long to respond', 'delay', 'lag', 'waiting'])) {
     issues.push('slow response time');
     summaryBits.push('response time feels too slow');
@@ -468,7 +462,7 @@ function inferSeverity(combinedLower, issues, categories) {
   return 'Low';
 }
 
-function makeFollowUpQuestion(complaint, clarificationCount) {
+function makeFollowUpQuestion(complaint, clarificationCount, lower, historyLower) {
   if (clarificationCount >= 1) return '';
 
   if (complaint.categories.includes('document handling')) {
@@ -502,7 +496,17 @@ function makeFollowUpQuestion(complaint, clarificationCount) {
   return '';
 }
 
-function makeFallbackClarification(complaint) {
+function makeFallbackClarification(complaint, lower, historyLower) {
+  if (['both', 'first reply', 'back-and-forth', 'back and forth', 'yes', 'no'].includes(lower)) {
+    if (historyLower.includes('slowness affect the first reply, the back-and-forth, or both')) {
+      return 'Understood, Mr P. I now have that Chanelle feels slow in both the first reply and the back-and-forth. Would you like me to pass that to Fiker now?';
+    }
+
+    if (historyLower.includes('main problem the clarity of the answer, the structure, or that it missed the point')) {
+      return 'Understood, Mr P. I’ve noted that. Would you like me to pass that to Fiker now?';
+    }
+  }
+
   if (complaint.agent) {
     return `I understand, Mr P. What seems to be the main issue with ${complaint.agent}?`;
   }
