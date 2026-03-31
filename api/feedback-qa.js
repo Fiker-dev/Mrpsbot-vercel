@@ -36,6 +36,8 @@ function buildFixPrompt(record, qaSummary) {
     `Target repo: ${record.repo_target || 'unknown'}`,
     `Priority: ${record.priority}`,
     '',
+    record.repo_context || 'Repo context: Review the application runtime and setup before changing code.',
+    '',
     'Developer summary',
     record.developer_summary || record.summary || '(none)',
     '',

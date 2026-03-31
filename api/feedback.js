@@ -94,11 +94,41 @@ function inferWorkflowRoute(record) {
   return 'qa';
 }
 
+function buildRepoContext(repoTarget) {
+  if (repoTarget === 'chanelle-legal-assistant') {
+    return [
+      'Repo context:',
+      '- Local FastAPI legal assistant app.',
+      '- Main entrypoint is app.py.',
+      '- Start command: uvicorn app:app --reload --host 0.0.0.0 --port 8000.',
+      '- Uses Ollama locally with llama3.1 and nomic-embed-text.',
+      '- Frontend is vanilla HTML/CSS/JS.',
+      '- Tests: pytest tests/test_docs.py -v.',
+      '- Known real-world failure already seen: startup crash on Python 3.14 involving chromadb / pydantic.v1 ConfigError about chroma_server_nofile.',
+    ].join('\n');
+  }
+
+  if (repoTarget === 'mrpsagentguide') {
+    return [
+      'Repo context:',
+      '- Frontend guide site hosting Lana widget.',
+      '- Primary concern is widget UX, wording, submission flow, and browser-side integration with mrpsbot-vercel.',
+    ].join('\n');
+  }
+
+  return [
+    'Repo context:',
+    '- Review the repository structure and runtime before testing.',
+  ].join('\n');
+}
+
 function buildQaTask(record) {
   return [
     `Reference ID: ${record.id}`,
     `Target repo: ${record.repo_target || 'unknown'}`,
     `Priority: ${record.priority}`,
+    '',
+    record.repo_context || buildRepoContext(record.repo_target),
     '',
     'Goal',
     'Reproduce the reported issue and collect concrete evidence before handing it to a coding agent.',
@@ -125,6 +155,8 @@ function buildCodingPrompt(record) {
     `Reference ID: ${record.id}`,
     `Target repo: ${record.repo_target || 'unknown'}`,
     `Priority: ${record.priority}`,
+    '',
+    record.repo_context || buildRepoContext(record.repo_target),
     '',
     'Use this developer summary as the primary fix brief:',
     record.developer_summary || record.summary || '(none)',
@@ -473,6 +505,7 @@ module.exports = async function handler(req, res) {
     record.repo_target = record.category === 'agent behavior'
       ? 'chanelle-legal-assistant'
       : 'mrpsagentguide';
+    record.repo_context = buildRepoContext(record.repo_target);
     record.qa_task = buildQaTask(record);
     record.fix_prompt = buildCodingPrompt(record);
 

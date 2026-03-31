@@ -106,6 +106,7 @@ export default async function handler(req, res) {
         fix_prompt,
         fix_summary,
         repo_target,
+        repo_context,
         repro_status,
         repro_steps,
         observed_result,
@@ -210,6 +211,10 @@ export default async function handler(req, res) {
           typeof repo_target === 'string' && repo_target.trim()
             ? repo_target.trim()
             : existing.repo_target,
+        repo_context:
+          typeof repo_context === 'string' && repo_context.trim()
+            ? repo_context.trim()
+            : existing.repo_context,
         repro_status:
           typeof repro_status === 'string' && repro_status.trim()
             ? repro_status.trim()
