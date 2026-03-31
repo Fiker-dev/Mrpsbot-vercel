@@ -210,7 +210,7 @@ async function sendFeedbackNotifications(record) {
   ].join('\n');
 
   const userText = [
-    `Your feedback "${record.summary}" has been received by Fiker.`,
+    'Confirmation: your feedback was received by Fiker.',
     '',
     'We will notify you once it gets fixed.',
     '',
