@@ -362,6 +362,8 @@ function normalizeFeedback(rawMessage, source) {
 
 function formatRecordText(record) {
   return [
+    'New Lana feedback received.',
+    '',
     `Reference ID: ${record.id}`,
     `Title: ${record.title}`,
     `Category: ${record.category}`,
@@ -374,20 +376,8 @@ function formatRecordText(record) {
     `QA status: ${record.qa_status || 'not_started'}`,
     `Coding status: ${record.coding_status || 'blocked'}`,
     '',
-    'Developer summary',
-    record.developer_summary || '(none)',
-    '',
     'Mr P said',
     record.user_message || '(none)',
-    '',
-    'Details',
-    record.details,
-    '',
-    'QA task',
-    record.qa_task || '(none)',
-    '',
-    'Fix prompt',
-    record.fix_prompt || '(none)',
   ].join('\n');
 }
 
@@ -436,12 +426,7 @@ async function sendEmail({ to, subject, text, from }) {
 
 async function sendFeedbackNotifications(record) {
   const userEmail = record.user_email || DEFAULT_USER_EMAIL;
-
-  const adminText = [
-    'New Lana feedback received.',
-    '',
-    formatRecordText(record),
-  ].join('\n');
+  const adminText = formatRecordText(record);
 
   const userText = [
     `Confirmation: your feedback "${record.user_message || record.summary}" was received by Fiker.`,

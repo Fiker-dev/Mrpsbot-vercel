@@ -1,5 +1,10 @@
 const { kv } = require('@vercel/kv');
 
+const ADMIN_EMAIL = 'fikerzabate16@gmail.com';
+const VERIFIED_SENDER_EMAIL = 'lana@notify.lulidigital.com';
+const SHARED_FROM_EMAIL = `Lana_lulidigital <${VERIFIED_SENDER_EMAIL}>`;
+const SHARED_SUBJECT = 'Mrp feedback';
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -8,6 +13,49 @@ function setCors(res) {
 
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+async function sendEmail({ to, subject, text: bodyText, from }) {
+  const apiKey = process.env.RESEND_API_KEY;
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'Missing RESEND_API_KEY',
+    };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: from || SHARED_FROM_EMAIL,
+      to: [to],
+      subject,
+      text: bodyText,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: data?.message || `Email API failed with status ${response.status}`,
+      response: data,
+    };
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    id: data?.id || null,
+  };
 }
 
 function buildQaSummary(record, input) {
@@ -113,6 +161,34 @@ async function persistRecord(record) {
   await kv.ltrim('feedback_memory', 0, 99);
 }
 
+async function sendCodingReadyNotification(record) {
+  const adminText = [
+    'Coding handoff is prepared.',
+    '',
+    `Reference ID: ${record.id}`,
+    `Title: ${record.title}`,
+    `Category: ${record.category}`,
+    `Priority: ${record.priority}`,
+    `Status: ${record.status}`,
+    `Source: ${record.source}`,
+    `Submitted: ${record.submitted_at}`,
+    `Triage status: ${record.triage_status || 'not_generated'}`,
+    `Routing: ${record.routing || 'unassigned'}`,
+    `QA status: ${record.qa_status || 'not_started'}`,
+    `Coding status: ${record.coding_status || 'blocked'}`,
+    '',
+    'Mr P said',
+    record.user_message || '(none)',
+  ].join('\n');
+
+  return sendEmail({
+    to: ADMIN_EMAIL,
+    subject: SHARED_SUBJECT,
+    text: adminText,
+    from: SHARED_FROM_EMAIL,
+  });
+}
+
 module.exports = async function handler(req, res) {
   setCors(res);
 
@@ -160,12 +236,22 @@ module.exports = async function handler(req, res) {
 
     if (action === 'complete') {
       const updated = applyQaOutcome(existing, body);
+      let notification = null;
+
+      if (updated.coding_status === 'ready_for_fix') {
+        notification = await sendCodingReadyNotification(updated);
+        if (notification?.ok) {
+          updated.coding_ready_notified_at = new Date().toISOString();
+        }
+      }
+
       await persistRecord(updated);
 
       return res.status(200).json({
         ok: true,
         action: 'complete',
         item: updated,
+        notification,
       });
     }
 
