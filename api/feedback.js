@@ -1,7 +1,7 @@
 // api/feedback.js
 // Stores Lana feedback in:
 // 1) Vercel KV memory
-// 2) Google Drive folder
+// 2) Google Drive folder when credentials are valid
 
 const { kv } = require('@vercel/kv');
 const { google } = require('googleapis');
@@ -18,6 +18,43 @@ function safeJsonParse(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function parseGoogleCredentials(rawValue) {
+  if (typeof rawValue !== 'string' || !rawValue.trim()) {
+    return {
+      credentials: null,
+      detail: 'Missing GOOGLE_SERVICE_ACCOUNT_JSON',
+    };
+  }
+
+  const trimmed = rawValue.trim();
+  const direct = safeJsonParse(trimmed, null);
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return { credentials: direct, detail: null };
+  }
+
+  if (typeof direct === 'string') {
+    const nested = safeJsonParse(direct, null);
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return { credentials: nested, detail: null };
+    }
+  }
+
+  try {
+    const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
+    const base64Parsed = safeJsonParse(decoded, null);
+    if (base64Parsed && typeof base64Parsed === 'object' && !Array.isArray(base64Parsed)) {
+      return { credentials: base64Parsed, detail: null };
+    }
+  } catch {
+    // Ignore base64 decode errors and fall through to the explicit detail below.
+  }
+
+  return {
+    credentials: null,
+    detail: 'Invalid GOOGLE_SERVICE_ACCOUNT_JSON',
+  };
 }
 
 function normalizeFeedback(rawMessage, source) {
@@ -62,9 +99,7 @@ function normalizeFeedback(rawMessage, source) {
         ? parsed.details.trim()
         : 'General feedback',
     user_message:
-      typeof parsed.user_message === 'string'
-        ? parsed.user_message.trim()
-        : '',
+      typeof parsed.user_message === 'string' ? parsed.user_message.trim() : '',
     status:
       typeof parsed.status === 'string' && parsed.status.trim()
         ? parsed.status.trim()
@@ -74,13 +109,16 @@ function normalizeFeedback(rawMessage, source) {
 }
 
 async function writeToGoogleDrive(record) {
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON || !process.env.GOOGLE_DRIVE_FOLDER_ID) {
-    throw new Error('Missing Google Drive environment variables');
+  if (!process.env.GOOGLE_DRIVE_FOLDER_ID) {
+    throw new Error('Missing GOOGLE_DRIVE_FOLDER_ID');
   }
 
-  const credentials = safeJsonParse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON, null);
+  const { credentials, detail } = parseGoogleCredentials(
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+  );
+
   if (!credentials) {
-    throw new Error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON');
+    throw new Error(detail || 'Invalid GOOGLE_SERVICE_ACCOUNT_JSON');
   }
 
   const auth = new google.auth.GoogleAuth({
@@ -118,10 +156,9 @@ async function writeToGoogleDrive(record) {
       .trim()
       .replace(/\s+/g, '-')
       .slice(0, 60) || 'feedback';
-
   const fileName = `${record.submitted_at.slice(0, 10)}-${filenameSafeTitle}-${record.id}.txt`;
 
-  const driveResult = await drive.files.create({
+  const response = await drive.files.create({
     requestBody: {
       name: fileName,
       parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
@@ -131,12 +168,10 @@ async function writeToGoogleDrive(record) {
       mimeType: 'text/plain',
       body: driveBody,
     },
-    fields: 'id,name,webViewLink,parents',
+    fields: 'id,name,webViewLink',
   });
 
-  console.log('Drive upload success:', driveResult.data);
-
-  return driveResult.data;
+  return response.data;
 }
 
 module.exports = async function handler(req, res) {
@@ -160,9 +195,10 @@ module.exports = async function handler(req, res) {
     const normalized = normalizeFeedback(message, source);
     const submittedAt = new Date().toISOString();
     const id =
-      typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
+      globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
         : `fb_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const now = Date.now();
 
     const record = {
       id,
@@ -180,35 +216,46 @@ module.exports = async function handler(req, res) {
     };
 
     await kv.set(`feedback:${id}`, record);
-
     await kv.zadd('feedback:timeline', {
-      score: Date.now(),
+      score: now,
       member: JSON.stringify(record),
     });
-
     await kv.zadd('feedback:timeline:mr-p', {
-      score: Date.now(),
+      score: now,
       member: JSON.stringify(record),
     });
-
     await kv.lpush('feedback_memory', JSON.stringify(record));
     await kv.ltrim('feedback_memory', 0, 99);
 
-    const driveFile = await writeToGoogleDrive(record);
+    let driveSaved = false;
+    let driveFile = null;
+    let driveError = null;
+
+    try {
+      driveFile = await writeToGoogleDrive(record);
+      driveSaved = true;
+    } catch (error) {
+      driveError = error && error.message ? error.message : 'Unknown Google Drive error';
+      console.error('Feedback drive write failed:', {
+        id,
+        detail: driveError,
+      });
+    }
 
     return res.status(200).json({
       ok: true,
       id: record.id,
       saved: true,
+      driveSaved,
       driveFile,
+      driveError,
     });
   } catch (error) {
     console.error('Feedback save error:', error);
 
     return res.status(500).json({
       error: 'Failed to save feedback',
-      detail: error?.message || 'Unknown error',
-      googleDetail: error?.response?.data || null,
+      detail: error && error.message ? error.message : 'Unknown error',
     });
   }
 };
