@@ -6,7 +6,8 @@ const { kv } = require('@vercel/kv');
 const ADMIN_EMAIL = 'fikerzabate16@gmail.com';
 const DEFAULT_USER_EMAIL = 'fikerzabate162@gmail.com';
 const VERIFIED_SENDER_EMAIL = 'lana@notify.lulidigital.com';
-const SHARED_FROM_EMAIL = `Lana_Lulidigital <${VERIFIED_SENDER_EMAIL}>`;
+const SHARED_FROM_EMAIL = `Lana_lulidigital <${VERIFIED_SENDER_EMAIL}>`;
+const SHARED_SUBJECT = 'Mrp feedback';
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -163,13 +164,13 @@ async function sendFeedbackNotifications(record) {
   const [adminResult, userResult] = await Promise.all([
     sendEmail({
       to: ADMIN_EMAIL,
-      subject: `New feedback: ${record.title}`,
+      subject: SHARED_SUBJECT,
       text: adminText,
       from: SHARED_FROM_EMAIL,
     }),
     sendEmail({
       to: userEmail,
-      subject: 'We received your feedback',
+      subject: SHARED_SUBJECT,
       text: userText,
       from: SHARED_FROM_EMAIL,
     }),
