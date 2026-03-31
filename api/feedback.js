@@ -5,7 +5,7 @@ const { kv } = require('@vercel/kv');
 
 const ADMIN_EMAIL = 'fikerzabate16@gmail.com';
 const DEFAULT_USER_EMAIL = 'fikerzabate162@gmail.com';
-const DEFAULT_FROM_EMAIL = 'Mr P Feedback <onboarding@resend.dev>';
+const DEFAULT_FROM_EMAIL = 'Mr P Feedback <lana@notify.lulidigital.com>';
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -98,7 +98,7 @@ function formatRecordText(record) {
 
 async function sendEmail({ to, subject, text }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM || DEFAULT_FROM_EMAIL;
+  const from = DEFAULT_FROM_EMAIL;
 
   if (!apiKey) {
     return {
