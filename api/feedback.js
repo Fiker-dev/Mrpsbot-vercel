@@ -60,6 +60,110 @@ function buildStructuredDetails(parsed) {
   return lines.join('\n');
 }
 
+function buildFallbackDeveloperSummary(record) {
+  return [
+    `Title: ${record.title}`,
+    `Reference ID: ${record.id}`,
+    `Priority: ${record.priority}`,
+    `Category: ${record.category}`,
+    `Source: ${record.source}`,
+    '',
+    'Observed behavior',
+    record.summary || record.details || 'Not specified',
+    '',
+    'Raw user quote',
+    record.user_message || '(none)',
+    '',
+    'Next step',
+    'Review the raw user quote and reproduce the issue before assigning it to a coding agent.',
+  ].join('\n');
+}
+
+function extractAnthropicText(data) {
+  if (!data || !Array.isArray(data.content)) return '';
+
+  return data.content
+    .filter((item) => item && item.type === 'text' && typeof item.text === 'string')
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
+async function generateDeveloperSummary(record) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  if (!apiKey) {
+    return {
+      text: buildFallbackDeveloperSummary(record),
+      status: 'fallback_missing_api_key',
+    };
+  }
+
+  const model = process.env.CLAUDE_TRIAGE_MODEL || 'claude-sonnet-4-20250514';
+  const system = [
+    'You are an internal software triage agent.',
+    'Turn user feedback into a concise developer handoff.',
+    'Do not rewrite away the raw user complaint.',
+    'Output plain text only.',
+    'Use these sections exactly: Title, Product area, Severity, Observed behavior, Expected behavior, Reproduction notes, Technical clues, Raw user quote, Recommended next step.',
+    'Be concrete and preserve specific errors, stack clues, versions, and user intent.',
+  ].join(' ');
+  const prompt = [
+    `Reference ID: ${record.id}`,
+    `Title: ${record.title}`,
+    `Category: ${record.category}`,
+    `Priority: ${record.priority}`,
+    `Source: ${record.source}`,
+    '',
+    'Summary',
+    record.summary || '(none)',
+    '',
+    'Details',
+    record.details || '(none)',
+    '',
+    'Raw user quote',
+    record.user_message || '(none)',
+  ].join('\n');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 700,
+      system,
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  const text = extractAnthropicText(data);
+
+  if (!response.ok || !text) {
+    return {
+      text: buildFallbackDeveloperSummary(record),
+      status: response.ok ? 'fallback_empty_model_response' : 'fallback_model_error',
+      error: data?.error?.message || data?.message || `Claude API failed with status ${response.status}`,
+    };
+  }
+
+  return {
+    text,
+    status: 'generated',
+    model,
+  };
+}
+
 function normalizeFeedback(rawMessage, source) {
   let parsed = rawMessage;
 
@@ -138,22 +242,23 @@ function normalizeFeedback(rawMessage, source) {
 
 function formatRecordText(record) {
   return [
-    `Feedback ID: ${record.id}`,
+    `Reference ID: ${record.id}`,
     `Title: ${record.title}`,
     `Category: ${record.category}`,
     `Priority: ${record.priority}`,
     `Status: ${record.status}`,
     `Source: ${record.source}`,
     `Submitted: ${record.submitted_at}`,
+    `Triage status: ${record.triage_status || 'not_generated'}`,
     '',
-    'Summary',
-    record.summary,
+    'Developer summary',
+    record.developer_summary || '(none)',
+    '',
+    'Mr P said',
+    record.user_message || '(none)',
     '',
     'Details',
     record.details,
-    '',
-    'User message',
-    record.user_message || '(none)',
   ].join('\n');
 }
 
@@ -285,6 +390,17 @@ module.exports = async function handler(req, res) {
       updated_at: submittedAt,
       client: 'mr-p',
     };
+
+    const developerSummary = await generateDeveloperSummary(record);
+
+    record.developer_summary = developerSummary.text;
+    record.triage_status = developerSummary.status;
+    if (developerSummary.model) {
+      record.triage_model = developerSummary.model;
+    }
+    if (developerSummary.error) {
+      record.triage_error = developerSummary.error;
+    }
 
     await kv.set(`feedback:${id}`, record);
     await kv.zadd('feedback:timeline', {
