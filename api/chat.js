@@ -171,6 +171,10 @@ function includesAny(text, terms) {
   return terms.some((term) => text.includes(term));
 }
 
+function matchesAnyPattern(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
 function unique(items) {
   return [...new Set(items)];
 }
@@ -373,6 +377,10 @@ function isImmediateSubmit(lower) {
     return false;
   }
 
+  if (matchesAnyPattern(lower, [/\b(pass|send|submit|tell)\b.*\bfiker\b/, /\bfiker\b.*\b(pass|send|submit|tell)\b/])) {
+    return true;
+  }
+
   const triggers = [
     'just tell fiker',
     'tell fiker',
@@ -536,7 +544,18 @@ function extractComplaint(message, userConversationLower) {
     categories.push('collaboration flow');
   }
 
-  if (includesAny(userConversationLower, ['document', 'file', 'uploaded', 'upload', 'case file', 'wrong document'])) {
+  if (
+    matchesAnyPattern(userConversationLower, [
+      /\bdocument\b/,
+      /\bdocuments\b/,
+      /\bfile\b/,
+      /\bfiles\b/,
+      /\bupload\b/,
+      /\buploaded\b/,
+      /\bcase file\b/,
+      /\bwrong document\b/,
+    ])
+  ) {
     categories.push('document handling');
   }
 
