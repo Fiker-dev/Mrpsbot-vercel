@@ -107,6 +107,7 @@ export default async function handler(req, res) {
         fix_summary,
         repo_target,
         repo_context,
+        architecture_constraints,
         repro_status,
         repro_steps,
         observed_result,
@@ -215,6 +216,10 @@ export default async function handler(req, res) {
           typeof repo_context === 'string' && repo_context.trim()
             ? repo_context.trim()
             : existing.repo_context,
+        architecture_constraints:
+          typeof architecture_constraints === 'string' && architecture_constraints.trim()
+            ? architecture_constraints.trim()
+            : existing.architecture_constraints,
         repro_status:
           typeof repro_status === 'string' && repro_status.trim()
             ? repro_status.trim()

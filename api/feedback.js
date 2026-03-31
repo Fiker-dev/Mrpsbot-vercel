@@ -122,6 +122,35 @@ function buildRepoContext(repoTarget) {
   ].join('\n');
 }
 
+function buildArchitectureConstraints(repoTarget) {
+  if (repoTarget === 'chanelle-legal-assistant') {
+    return [
+      'Architecture constraints:',
+      '- Preserve the core Sofie -> Mimi -> Chanelle research flow unless the fix explicitly targets that orchestration.',
+      '- Treat app.py as a monolithic backend; avoid broad refactors unless explicitly approved.',
+      '- Do not casually alter Azure AD / Microsoft Graph auth behavior.',
+      '- Do not casually change document ingestion, SQLite persistence, or the in-memory vector store design.',
+      '- Maintain vanilla frontend behavior and avoid introducing a new framework or build step.',
+      '- Respect existing QA guardrails in CLAUDE.md, especially conversation routing, voice behavior, and security-sensitive flows.',
+      '- If the requested work sounds like a feature or architecture change rather than a bug fix, stop and ask for approval.',
+    ].join('\n');
+  }
+
+  if (repoTarget === 'mrpsagentguide') {
+    return [
+      'Architecture constraints:',
+      '- Preserve the current Lana widget integration with mrpsbot-vercel.',
+      '- Avoid changing submission flow semantics without explicit approval.',
+      '- Treat feature requests separately from bug fixes and require approval before implementing net-new behavior.',
+    ].join('\n');
+  }
+
+  return [
+    'Architecture constraints:',
+    '- Preserve existing architecture and patterns unless explicit approval is provided for broader changes.',
+  ].join('\n');
+}
+
 function buildQaTask(record) {
   return [
     `Reference ID: ${record.id}`,
@@ -157,6 +186,8 @@ function buildCodingPrompt(record) {
     `Priority: ${record.priority}`,
     '',
     record.repo_context || buildRepoContext(record.repo_target),
+    '',
+    record.architecture_constraints || buildArchitectureConstraints(record.repo_target),
     '',
     'Use this developer summary as the primary fix brief:',
     record.developer_summary || record.summary || '(none)',
@@ -506,6 +537,7 @@ module.exports = async function handler(req, res) {
       ? 'chanelle-legal-assistant'
       : 'mrpsagentguide';
     record.repo_context = buildRepoContext(record.repo_target);
+    record.architecture_constraints = buildArchitectureConstraints(record.repo_target);
     record.qa_task = buildQaTask(record);
     record.fix_prompt = buildCodingPrompt(record);
 

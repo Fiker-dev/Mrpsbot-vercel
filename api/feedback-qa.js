@@ -38,6 +38,8 @@ function buildFixPrompt(record, qaSummary) {
     '',
     record.repo_context || 'Repo context: Review the application runtime and setup before changing code.',
     '',
+    record.architecture_constraints || 'Architecture constraints: Preserve existing architecture and require approval for broader changes.',
+    '',
     'Developer summary',
     record.developer_summary || record.summary || '(none)',
     '',
