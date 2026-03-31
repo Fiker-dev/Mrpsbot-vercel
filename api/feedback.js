@@ -23,6 +23,43 @@ function safeJsonParse(value, fallback = null) {
   }
 }
 
+function compactText(value) {
+  return String(value || '').trim();
+}
+
+function buildStructuredDetails(parsed) {
+  const complaint = parsed?.complaint && typeof parsed.complaint === 'object'
+    ? parsed.complaint
+    : {};
+  const lines = [
+    `Subject: ${compactText(parsed.subject) || 'Mr P feedback'}`,
+    `Agent: ${compactText(complaint.agent) || 'Not specified'}`,
+    `Severity: ${compactText(complaint.severity) || 'Not specified'}`,
+    `Task attempted: ${compactText(complaint.task_attempted) || 'Not specified'}`,
+    `What happened: ${compactText(complaint.what_happened) || 'Not specified'}`,
+    `Expected behavior: ${compactText(complaint.expected_behavior) || 'Not specified'}`,
+    `Categories: ${
+      Array.isArray(complaint.categories) && complaint.categories.length
+        ? complaint.categories.join('; ')
+        : 'general'
+    }`,
+    `Issues: ${
+      Array.isArray(complaint.issues) && complaint.issues.length
+        ? complaint.issues.join('; ')
+        : 'Not specified'
+    }`,
+    '',
+    'Latest user message',
+    compactText(complaint.latest_message) || '(none)',
+  ];
+
+  if (compactText(parsed.conversation_excerpt)) {
+    lines.push('', 'Conversation excerpt', compactText(parsed.conversation_excerpt));
+  }
+
+  return lines.join('\n');
+}
+
 function normalizeFeedback(rawMessage, source) {
   let parsed = rawMessage;
 
@@ -44,29 +81,51 @@ function normalizeFeedback(rawMessage, source) {
     };
   }
 
+  const isStructuredFeedbackNote = parsed.type === 'feedback_note';
+  const complaint =
+    parsed.complaint && typeof parsed.complaint === 'object' ? parsed.complaint : {};
+  const fallbackSummary = compactText(parsed.summary) || 'General feedback';
+  const fallbackDetails = isStructuredFeedbackNote
+    ? buildStructuredDetails(parsed)
+    : fallbackSummary;
+  const fallbackUserMessage =
+    compactText(parsed.user_message) ||
+    compactText(complaint.latest_message) ||
+    '';
+  const fallbackCategory =
+    typeof parsed.category === 'string' && parsed.category.trim()
+      ? parsed.category.trim()
+      : Array.isArray(complaint.categories) && complaint.categories.length
+        ? complaint.categories[0]
+        : 'general';
+  const fallbackPriority =
+    typeof parsed.priority === 'string' && parsed.priority.trim()
+      ? parsed.priority.trim()
+      : compactText(complaint.severity)
+        ? complaint.severity.toLowerCase()
+        : 'normal';
+
   return {
     title:
       typeof parsed.title === 'string' && parsed.title.trim()
         ? parsed.title.trim()
+        : typeof parsed.subject === 'string' && parsed.subject.trim()
+          ? parsed.subject.trim()
         : 'Mr P feedback',
     category:
-      typeof parsed.category === 'string' && parsed.category.trim()
-        ? parsed.category.trim()
-        : 'general',
+      fallbackCategory,
     priority:
-      typeof parsed.priority === 'string' && parsed.priority.trim()
-        ? parsed.priority.trim()
-        : 'normal',
+      fallbackPriority,
     summary:
       typeof parsed.summary === 'string' && parsed.summary.trim()
         ? parsed.summary.trim()
-        : 'General feedback',
+        : fallbackSummary,
     details:
       typeof parsed.details === 'string' && parsed.details.trim()
         ? parsed.details.trim()
-        : 'General feedback',
+        : fallbackDetails,
     user_message:
-      typeof parsed.user_message === 'string' ? parsed.user_message.trim() : '',
+      fallbackUserMessage,
     user_email:
       typeof parsed.user_email === 'string' ? parsed.user_email.trim() : '',
     status:

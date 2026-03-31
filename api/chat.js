@@ -307,6 +307,31 @@ function isApprovalReply(lower) {
   return approvals.includes(lower);
 }
 
+function userIsAddingMoreDetail(lower) {
+  return (
+    includesAny(lower, [
+      'one more detail',
+      'another detail',
+      'one more thing',
+      'another thing',
+      'before you send it',
+      'before you send',
+      'when you send it',
+      'when you send',
+      'include this too',
+      'include that too',
+      'add this too',
+      'add that too',
+      'wait before you send',
+      'dont send yet',
+      "don't send yet",
+      'not yet',
+      'hold on',
+    ]) ||
+    (/^and\b/.test(lower) && includesAny(lower, ['detail', 'also', 'too']))
+  );
+}
+
 function didLastAssistantAskForSendConfirmation(text) {
   const lower = normalize(text);
 
@@ -319,6 +344,10 @@ function didLastAssistantAskForSendConfirmation(text) {
 }
 
 function isImmediateSubmit(lower) {
+  if (userIsAddingMoreDetail(lower)) {
+    return false;
+  }
+
   const triggers = [
     'just tell fiker',
     'tell fiker',
@@ -639,6 +668,13 @@ function makeFollowUpQuestion(complaint, clarificationCount) {
 
 function makeFallbackClarification(complaint, lower, lastAssistantMessage) {
   const lastAssistantLower = normalize(lastAssistantMessage);
+
+  if (
+    didLastAssistantAskForSendConfirmation(lastAssistantMessage) &&
+    userIsAddingMoreDetail(lower)
+  ) {
+    return 'Understood, Mr P. I’ll wait. Please add the extra detail you want included before I send it to Fiker.';
+  }
 
   if (['both', 'first reply', 'back and forth', 'back and forth only', 'yes', 'no'].includes(lower)) {
     if (lastAssistantLower.includes('did the slowness affect the first reply the back and forth or both')) {
