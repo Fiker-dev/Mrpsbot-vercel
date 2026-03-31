@@ -53,6 +53,20 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
+      const id =
+        typeof req.query?.id === 'string' ? req.query.id.trim() : '';
+      if (id) {
+        const item = await kv.get(`feedback:${id}`);
+        if (!item) {
+          return res.status(404).json({ error: 'Feedback record not found' });
+        }
+
+        return res.status(200).json({
+          ok: true,
+          item,
+        });
+      }
+
       const client =
         typeof req.query?.client === 'string' ? req.query.client.trim() : '';
       const limit = normalizeLimit(req.query?.limit, 10, 50);
@@ -77,8 +91,27 @@ export default async function handler(req, res) {
         summary,
         details,
         user_message,
+        user_email,
         source,
         client,
+        developer_summary,
+        triage_status,
+        triage_model,
+        triage_error,
+        routing,
+        qa_status,
+        qa_summary,
+        qa_task,
+        coding_status,
+        fix_prompt,
+        fix_summary,
+        repo_target,
+        repro_status,
+        repro_steps,
+        observed_result,
+        expected_result,
+        technical_evidence,
+        confidence,
       } = req.body || {};
 
       if (!id || typeof id !== 'string') {
@@ -121,10 +154,86 @@ export default async function handler(req, res) {
           typeof user_message === 'string'
             ? user_message.trim()
             : existing.user_message,
+        user_email:
+          typeof user_email === 'string' && user_email.trim()
+            ? user_email.trim()
+            : existing.user_email,
         source:
           typeof source === 'string' && source.trim()
             ? source.trim()
             : existing.source,
+        developer_summary:
+          typeof developer_summary === 'string' && developer_summary.trim()
+            ? developer_summary.trim()
+            : existing.developer_summary,
+        triage_status:
+          typeof triage_status === 'string' && triage_status.trim()
+            ? triage_status.trim()
+            : existing.triage_status,
+        triage_model:
+          typeof triage_model === 'string' && triage_model.trim()
+            ? triage_model.trim()
+            : existing.triage_model,
+        triage_error:
+          typeof triage_error === 'string'
+            ? triage_error.trim()
+            : existing.triage_error,
+        routing:
+          typeof routing === 'string' && routing.trim()
+            ? routing.trim()
+            : existing.routing,
+        qa_status:
+          typeof qa_status === 'string' && qa_status.trim()
+            ? qa_status.trim()
+            : existing.qa_status,
+        qa_summary:
+          typeof qa_summary === 'string' && qa_summary.trim()
+            ? qa_summary.trim()
+            : existing.qa_summary,
+        qa_task:
+          typeof qa_task === 'string' && qa_task.trim()
+            ? qa_task.trim()
+            : existing.qa_task,
+        coding_status:
+          typeof coding_status === 'string' && coding_status.trim()
+            ? coding_status.trim()
+            : existing.coding_status,
+        fix_prompt:
+          typeof fix_prompt === 'string' && fix_prompt.trim()
+            ? fix_prompt.trim()
+            : existing.fix_prompt,
+        fix_summary:
+          typeof fix_summary === 'string' && fix_summary.trim()
+            ? fix_summary.trim()
+            : existing.fix_summary,
+        repo_target:
+          typeof repo_target === 'string' && repo_target.trim()
+            ? repo_target.trim()
+            : existing.repo_target,
+        repro_status:
+          typeof repro_status === 'string' && repro_status.trim()
+            ? repro_status.trim()
+            : existing.repro_status,
+        repro_steps:
+          typeof repro_steps === 'string' && repro_steps.trim()
+            ? repro_steps.trim()
+            : existing.repro_steps,
+        observed_result:
+          typeof observed_result === 'string' && observed_result.trim()
+            ? observed_result.trim()
+            : existing.observed_result,
+        expected_result:
+          typeof expected_result === 'string' && expected_result.trim()
+            ? expected_result.trim()
+            : existing.expected_result,
+        technical_evidence:
+          typeof technical_evidence === 'string' && technical_evidence.trim()
+            ? technical_evidence.trim()
+            : existing.technical_evidence,
+        confidence:
+          typeof confidence === 'string' && confidence.trim()
+            ? confidence.trim()
+            : existing.confidence,
         client:
           typeof client === 'string' && client.trim()
             ? client.trim()

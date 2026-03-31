@@ -79,6 +79,63 @@ function buildFallbackDeveloperSummary(record) {
   ].join('\n');
 }
 
+function inferWorkflowRoute(record) {
+  const text = `${record.title}\n${record.summary}\n${record.details}\n${record.user_message}`.toLowerCase();
+  const isLikelyTextOnly =
+    record.category === 'ui/ux' ||
+    /\btypo\b|\bwording\b|\bcopy\b|\blabel\b|\bbutton text\b/.test(text);
+  const hasCrashOrRuntimeSignal =
+    /\bcrash\b|\berror\b|\bexception\b|\btraceback\b|\bconfigerror\b|\bfailed\b|\bnot working\b|\bstartup\b/.test(text);
+
+  if (isLikelyTextOnly && !hasCrashOrRuntimeSignal) {
+    return 'coding';
+  }
+
+  return 'qa';
+}
+
+function buildQaTask(record) {
+  return [
+    `Reference ID: ${record.id}`,
+    `Target repo: ${record.repo_target || 'unknown'}`,
+    `Priority: ${record.priority}`,
+    '',
+    'Goal',
+    'Reproduce the reported issue and collect concrete evidence before handing it to a coding agent.',
+    '',
+    'Developer summary',
+    record.developer_summary || record.summary || '(none)',
+    '',
+    'Mr P said',
+    record.user_message || '(none)',
+    '',
+    'Required output',
+    '- repro_status',
+    '- repro_steps',
+    '- observed_result',
+    '- expected_result',
+    '- technical_evidence',
+    '- confidence',
+    '- recommended next action',
+  ].join('\n');
+}
+
+function buildCodingPrompt(record) {
+  return [
+    `Reference ID: ${record.id}`,
+    `Target repo: ${record.repo_target || 'unknown'}`,
+    `Priority: ${record.priority}`,
+    '',
+    'Use this developer summary as the primary fix brief:',
+    record.developer_summary || record.summary || '(none)',
+    '',
+    'Raw user quote',
+    record.user_message || '(none)',
+    '',
+    'If QA evidence exists, use it as authoritative reproduction context before making code changes.',
+  ].join('\n');
+}
+
 function extractAnthropicText(data) {
   if (!data || !Array.isArray(data.content)) return '';
 
@@ -250,6 +307,9 @@ function formatRecordText(record) {
     `Source: ${record.source}`,
     `Submitted: ${record.submitted_at}`,
     `Triage status: ${record.triage_status || 'not_generated'}`,
+    `Routing: ${record.routing || 'unassigned'}`,
+    `QA status: ${record.qa_status || 'not_started'}`,
+    `Coding status: ${record.coding_status || 'blocked'}`,
     '',
     'Developer summary',
     record.developer_summary || '(none)',
@@ -259,6 +319,12 @@ function formatRecordText(record) {
     '',
     'Details',
     record.details,
+    '',
+    'QA task',
+    record.qa_task || '(none)',
+    '',
+    'Fix prompt',
+    record.fix_prompt || '(none)',
   ].join('\n');
 }
 
@@ -401,6 +467,14 @@ module.exports = async function handler(req, res) {
     if (developerSummary.error) {
       record.triage_error = developerSummary.error;
     }
+    record.routing = inferWorkflowRoute(record);
+    record.qa_status = record.routing === 'qa' ? 'pending' : 'not_required';
+    record.coding_status = record.routing === 'coding' ? 'ready_for_fix' : 'blocked_on_qa';
+    record.repo_target = record.category === 'agent behavior'
+      ? 'chanelle-legal-assistant'
+      : 'mrpsagentguide';
+    record.qa_task = buildQaTask(record);
+    record.fix_prompt = buildCodingPrompt(record);
 
     await kv.set(`feedback:${id}`, record);
     await kv.zadd('feedback:timeline', {
