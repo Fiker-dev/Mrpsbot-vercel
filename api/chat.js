@@ -44,15 +44,16 @@ module.exports = async function handler(req, res) {
     const lastAssistantMessage = getLastAssistantMessage(history);
 
     if (isImmediateSubmit(lower)) {
+      const submissionMessage = getSubmissionMessage(message, history);
       const complaint = withHistoricalUserContext(
-        extractComplaint(message, userConversationLower),
+        extractComplaint(submissionMessage, userConversationLower),
         history
       );
       const feedback = buildFeedbackSummary({
         clientId,
         complaint,
         historyText,
-        latestMessage: message,
+        latestMessage: submissionMessage,
         userRequestedImmediatePass: true,
       });
 
@@ -67,15 +68,16 @@ module.exports = async function handler(req, res) {
       didLastAssistantAskForSendConfirmation(lastAssistantMessage) &&
       isApprovalReply(lower)
     ) {
+      const submissionMessage = getSubmissionMessage(message, history);
       const complaint = withHistoricalUserContext(
-        extractComplaint(message, userConversationLower),
+        extractComplaint(submissionMessage, userConversationLower),
         history
       );
       const feedback = buildFeedbackSummary({
         clientId,
         complaint,
         historyText,
-        latestMessage: message,
+        latestMessage: submissionMessage,
         userRequestedImmediatePass: true,
       });
 
@@ -196,6 +198,29 @@ function getLastAssistantMessage(history) {
   }
 
   return '';
+}
+
+function getSubmissionMessage(currentMessage, history) {
+  const currentLower = normalize(currentMessage);
+
+  if (!isApprovalReply(currentLower)) {
+    return currentMessage;
+  }
+
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    if (!item || item.role !== 'user' || typeof item.text !== 'string') continue;
+
+    const text = item.text.trim();
+    if (!text) continue;
+
+    const lower = normalize(text);
+    if (isApprovalReply(lower)) continue;
+
+    return text;
+  }
+
+  return currentMessage;
 }
 
 function isGreetingOnly(lower) {
@@ -568,12 +593,15 @@ function extractComplaint(message, userConversationLower) {
   let taskAttempted = '';
   let whatHappened = '';
   let expectedBehavior = '';
+  const preciseReport = extractPreciseReport(message);
 
   if (agent) {
     taskAttempted = `Use ${agent} in the legal assistant app`;
   }
 
-  if (issues.length) {
+  if (preciseReport) {
+    whatHappened = preciseReport;
+  } else if (issues.length) {
     whatHappened = issues.join('; ');
   }
 
@@ -604,7 +632,39 @@ function extractComplaint(message, userConversationLower) {
     whatHappened,
     expectedBehavior,
     severity,
+    preciseReport,
   };
+}
+
+function extractPreciseReport(message) {
+  const text = String(message || '').trim();
+  if (!text) return '';
+
+  const lower = normalize(text);
+
+  if (
+    includesAny(lower, [
+      'failed before startup',
+      'fails before startup',
+      'crashes on',
+      'crashed on',
+      'configerror',
+      'error',
+      'exception',
+      'traceback',
+      'pydantic',
+      'chromadb',
+      'should not have sent',
+      'sent it immediately',
+      'wait because i wanted',
+      'before you send it',
+    ]) ||
+    text.length >= 120
+  ) {
+    return text;
+  }
+
+  return '';
 }
 
 function inferSeverity(userConversationLower, issues, categories) {
