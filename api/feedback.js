@@ -5,7 +5,9 @@ const { kv } = require('@vercel/kv');
 
 const ADMIN_EMAIL = 'fikerzabate16@gmail.com';
 const DEFAULT_USER_EMAIL = 'fikerzabate162@gmail.com';
-const DEFAULT_FROM_EMAIL = 'Mr P Feedback <lana@notify.lulidigital.com>';
+const VERIFIED_SENDER_EMAIL = 'lana@notify.lulidigital.com';
+const ADMIN_FROM_EMAIL = `Mr P Feedback <${VERIFIED_SENDER_EMAIL}>`;
+const USER_FROM_EMAIL = `Lana <${VERIFIED_SENDER_EMAIL}>`;
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -96,9 +98,8 @@ function formatRecordText(record) {
   ].join('\n');
 }
 
-async function sendEmail({ to, subject, text }) {
+async function sendEmail({ to, subject, text, from }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = DEFAULT_FROM_EMAIL;
 
   if (!apiKey) {
     return {
@@ -115,7 +116,7 @@ async function sendEmail({ to, subject, text }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from,
+      from: from || ADMIN_FROM_EMAIL,
       to: [to],
       subject,
       text,
@@ -165,11 +166,13 @@ async function sendFeedbackNotifications(record) {
       to: ADMIN_EMAIL,
       subject: `New feedback: ${record.title}`,
       text: adminText,
+      from: ADMIN_FROM_EMAIL,
     }),
     sendEmail({
       to: userEmail,
       subject: 'We received your feedback',
       text: userText,
+      from: USER_FROM_EMAIL,
     }),
   ]);
 
