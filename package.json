@@ -19,7 +19,6 @@
   },
   "homepage": "https://github.com/Fiker-dev/Mrpsbot-vercel#readme",
   "dependencies": {
-    "@vercel/kv": "^3.0.0",
-    "googleapis": "^171.4.0"
+    "@vercel/kv": "^3.0.0"
   }
 }

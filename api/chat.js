@@ -6,8 +6,7 @@
 // - not give legal advice
 // - ask concise follow-up questions only when needed
 // - stop and submit immediately when Mr P says to pass it on
-// - respond naturally to greetings and small talk
-// - keep enough conversation state from history to avoid loops
+// - respond naturally to greetings and small talk before moving into feedback mode
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -36,19 +35,19 @@ module.exports = async function handler(req, res) {
     }
 
     const lower = normalize(message);
+    const userHistoryText = getUserHistoryText(history);
+    const userHistoryLower = normalize(userHistoryText);
+    const userConversationLower = [userHistoryLower, lower].filter(Boolean).join('\n');
     const historyText = history
       .map((m) => `${m?.role || 'unknown'}: ${typeof m?.text === 'string' ? m.text : ''}`)
       .join('\n');
+    const lastAssistantMessage = getLastAssistantMessage(history);
 
-    const historyLower = normalize(historyText);
-    const combinedLower = `${historyLower}\n${lower}`.trim();
-
-    const complaint = extractComplaint(message, combinedLower);
-    const clarificationCount = countAssistantClarifications(history);
-    const state = detectConversationState(history);
-
-    // Immediate submit / stop clarifying
     if (isImmediateSubmit(lower)) {
+      const complaint = withHistoricalUserContext(
+        extractComplaint(message, userConversationLower),
+        history
+      );
       const feedback = buildFeedbackSummary({
         clientId,
         complaint,
@@ -64,40 +63,36 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // If Lana already asked "send now?" and user confirms, submit immediately
-    if (state.awaitingSendConfirmation && isAffirmative(lower)) {
+    if (
+      didLastAssistantAskForSendConfirmation(lastAssistantMessage) &&
+      isApprovalReply(lower)
+    ) {
+      const complaint = withHistoricalUserContext(
+        extractComplaint(message, userConversationLower),
+        history
+      );
       const feedback = buildFeedbackSummary({
         clientId,
         complaint,
         historyText,
         latestMessage: message,
-        userRequestedImmediatePass: false,
+        userRequestedImmediatePass: true,
       });
 
       return res.status(200).json({
-        reply: 'Understood, Mr P. I’m sending this to Fiker now.',
+        reply: 'Understood, Mr P. I’ll pass that to Fiker now.',
         done: true,
         feedback,
       });
     }
 
-    // If Lana already asked "send now?" and user declines, keep it open
-    if (state.awaitingSendConfirmation && isNegative(lower)) {
-      return res.status(200).json({
-        reply: 'Understood, Mr P. What else would you like me to add before I pass it on?',
-        done: false,
-      });
-    }
-
-    // Greeting only
     if (isGreetingOnly(lower)) {
       return res.status(200).json({
-        reply: `${getTimeGreeting()}, Mr P. I’m well, thank you. Do you have any feedback for me today?`,
+        reply: `${getTimeGreeting()}, Mr P. Do you have any feedback for me today?`,
         done: false,
       });
     }
 
-    // Small talk
     if (isSmallTalk(lower)) {
       return res.status(200).json({
         reply: buildSmallTalkReply(lower),
@@ -105,30 +100,11 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // If message is just a short answer to a recent question, fold it into current complaint
-    if (
-      state.awaitingClarification &&
-      isShortFollowUpAnswer(lower) &&
-      hasEnoughToSummarize(complaint)
-    ) {
-      const feedbackPreview = buildFeedbackSummary({
-        clientId,
-        complaint,
-        historyText,
-        latestMessage: message,
-        userRequestedImmediatePass: false,
-      });
+    const complaint = extractComplaint(message, userConversationLower);
+    const clarificationCount = countAssistantClarifications(history);
 
-      return res.status(200).json({
-        reply: 'Understood, Mr P. I have enough to pass this to Fiker. Would you like me to send it now?',
-        done: false,
-        feedback_preview: feedbackPreview.summary,
-      });
-    }
-
-    // If there is already enough, avoid dragging the user through more than one clarification
     if (hasEnoughToSummarize(complaint)) {
-      if (clarificationCount >= 1) {
+      if (clarificationCount >= 2) {
         const feedbackPreview = buildFeedbackSummary({
           clientId,
           complaint,
@@ -167,9 +143,8 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // Fallback clarification
     return res.status(200).json({
-      reply: makeFallbackClarification(complaint),
+      reply: makeFallbackClarification(complaint, lower, lastAssistantMessage),
       done: false,
     });
   } catch (err) {
@@ -184,6 +159,8 @@ module.exports = async function handler(req, res) {
 function normalize(text) {
   return String(text || '')
     .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^a-z0-9']+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -203,39 +180,75 @@ function getTimeGreeting() {
   return 'Good evening';
 }
 
+function getUserHistoryText(history) {
+  return history
+    .filter((item) => item && item.role === 'user' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join('\n');
+}
+
+function getLastAssistantMessage(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    if (item && item.role === 'assistant' && typeof item.text === 'string' && item.text.trim()) {
+      return item.text.trim();
+    }
+  }
+
+  return '';
+}
+
 function isGreetingOnly(lower) {
-  const greetings = [
+  const greetingPhrases = [
     'hi',
     'hello',
     'hey',
+    'hi love',
+    'hello love',
+    'hey love',
+    'hi dear',
+    'hello dear',
+    'hey dear',
+    'hi lana',
+    'hello lana',
+    'hey lana',
     'good morning',
+    'good morning love',
+    'good morning dear',
+    'good morning lana',
     'good afternoon',
+    'good afternoon love',
+    'good afternoon dear',
+    'good afternoon lana',
     'good evening',
+    'good evening love',
+    'good evening dear',
+    'good evening lana',
   ];
-  return greetings.includes(lower);
+
+  return greetingPhrases.includes(lower);
 }
 
 function isSmallTalk(lower) {
   const smallTalkPhrases = [
     'how are you',
-    'how are you?',
+    'how are you doing',
     'how are u',
     'how r you',
     'how have you been',
     'how do you do',
+    'what s up',
     'whats up',
-    "what's up",
+    'what is up',
     'how is your day',
-    "how's your day",
+    'how s your day',
     'are you okay',
     'you good',
     'i asked you how are you',
     'i asked how are you',
-    'how are you doing',
-    "how're you",
   ];
 
-  return smallTalkPhrases.some((phrase) => lower === phrase || lower.includes(phrase));
+  return smallTalkPhrases.includes(lower);
 }
 
 function buildSmallTalkReply(lower) {
@@ -251,29 +264,58 @@ function buildSmallTalkReply(lower) {
     lower.includes('how are u') ||
     lower.includes('how r you') ||
     lower.includes('how are you doing') ||
-    lower.includes("how're you") ||
     lower.includes('how have you been')
   ) {
     return `${getTimeGreeting()}, Mr P. I’m well, thank you. Do you have any feedback for me today?`;
   }
 
   if (
-    lower.includes("what's up") ||
+    lower.includes('what s up') ||
     lower.includes('whats up') ||
+    lower.includes('what is up') ||
     lower.includes('you good') ||
     lower.includes('are you okay')
   ) {
-    return `I’m good, thank you, Mr P. Is there anything you’d like me to pass on today?`;
+    return 'I’m well, thank you, Mr P. Is there anything you’d like me to pass on today?';
   }
 
   if (
     lower.includes('how is your day') ||
-    lower.includes("how's your day")
+    lower.includes('how s your day')
   ) {
-    return `It’s going well, thank you, Mr P. Do you have any feedback or issue you’d like me to help with today?`;
+    return 'It’s going well, thank you, Mr P. Do you have any feedback or issue you’d like me to help with today?';
   }
 
   return `${getTimeGreeting()}, Mr P. What would you like me to help with today?`;
+}
+
+function isApprovalReply(lower) {
+  const approvals = [
+    'yes',
+    'yeah',
+    'yep',
+    'ok',
+    'okay',
+    'sure',
+    'go ahead',
+    'do it',
+    'send it',
+    'pass it',
+    'submit it',
+  ];
+
+  return approvals.includes(lower);
+}
+
+function didLastAssistantAskForSendConfirmation(text) {
+  const lower = normalize(text);
+
+  return (
+    lower.includes('would you like me to send it now') ||
+    lower.includes('would you like me to pass that to fiker now') ||
+    lower.includes('would you like me to pass this to fiker now') ||
+    lower.includes('would you like me to pass it to fiker now')
+  );
 }
 
 function isImmediateSubmit(lower) {
@@ -289,6 +331,7 @@ function isImmediateSubmit(lower) {
     "just tell what i said to fiker that's all",
     'pass it on',
     'just pass it on',
+    'pass it',
     'send it',
     'send this',
     'log it',
@@ -309,93 +352,9 @@ function isImmediateSubmit(lower) {
     'just pass this on',
     'send it as is',
     'pass this as is',
-    'pass this',
   ];
 
-  return triggers.some((phrase) => lower.includes(phrase));
-}
-
-function isAffirmative(lower) {
-  const yesTerms = [
-    'yes',
-    'yeah',
-    'yep',
-    'sure',
-    'okay',
-    'ok',
-    'do it',
-    'send it',
-    'send',
-    'go ahead',
-    'please do',
-    'pass it',
-    'pass it on',
-    'submit it',
-    'log it',
-  ];
-
-  return yesTerms.some((term) => lower === term || lower.includes(term));
-}
-
-function isNegative(lower) {
-  const noTerms = [
-    'no',
-    'nope',
-    'not yet',
-    'wait',
-    'hold on',
-    'dont send',
-    "don't send",
-    'not now',
-    'let me add more',
-    'i want to add more',
-    'more',
-  ];
-
-  return noTerms.some((term) => lower === term || lower.includes(term));
-}
-
-function isShortFollowUpAnswer(lower) {
-  const shortAnswers = [
-    'both',
-    'first reply',
-    'back and forth',
-    'back-and-forth',
-    'clarity',
-    'structure',
-    'missed the point',
-    'confidence',
-    'privacy',
-    'both of them',
-    'all of it',
-  ];
-
-  if (shortAnswers.includes(lower)) return true;
-  return lower.split(' ').length <= 4;
-}
-
-function detectConversationState(history) {
-  const assistantTexts = history
-    .filter((item) => item && item.role === 'assistant' && typeof item.text === 'string')
-    .map((item) => normalize(item.text));
-
-  const lastAssistant = assistantTexts.length ? assistantTexts[assistantTexts.length - 1] : '';
-
-  return {
-    awaitingSendConfirmation:
-      lastAssistant.includes('would you like me to send it now') ||
-      lastAssistant.includes('would you like me to pass this to fiker now') ||
-      lastAssistant.includes('would you like me to send this now'),
-
-    awaitingClarification:
-      lastAssistant.includes('did the slowness affect') ||
-      lastAssistant.includes('was the main problem') ||
-      lastAssistant.includes('did this mainly affect your confidence') ||
-      lastAssistant.includes('was the issue that the wrong document was pulled in') ||
-      lastAssistant.includes('did the collaboration feel unclear') ||
-      lastAssistant.includes('what seems to be the main issue with') ||
-      lastAssistant.includes('what part of the app are you referring to'),
-  };
+  return triggers.some((phrase) => lower.includes(normalize(phrase)));
 }
 
 function countAssistantClarifications(history) {
@@ -408,6 +367,8 @@ function countAssistantClarifications(history) {
 
     if (
       text.includes('what seems to be the main issue') ||
+      text.includes('would you like me to pass that to fiker now') ||
+      text.includes('would you like me to send it now') ||
       text.includes('or is there one more detail you want to add') ||
       text.includes('did the app') ||
       text.includes('was the main problem') ||
@@ -419,8 +380,7 @@ function countAssistantClarifications(history) {
       text.includes('do you mean') ||
       text.includes('did the slowness affect') ||
       text.includes('did this mainly affect your confidence') ||
-      text.includes('what part of the app are you referring to') ||
-      text.includes('did the collaboration feel unclear')
+      text.includes('what part of the app are you referring to')
     ) {
       count += 1;
     }
@@ -440,80 +400,138 @@ function hasEnoughToSummarize(complaint) {
   );
 }
 
-function extractComplaint(message, combinedLower) {
+function currentMessageClearlyTargetsLana(currentLower) {
+  if (!currentLower.includes('lana')) return false;
+  if (isGreetingOnly(currentLower) || isSmallTalk(currentLower)) return false;
+
+  const lanaProblemPatterns = [
+    /\blana\b.*\b(slow|delay|lag|confusing|unclear|wrong|broken|stuck|fake|bad|problem|issue|complaint|feedback|not working|too long)\b/,
+    /\b(problem|issue|complaint|feedback)\b.*\blana\b/,
+    /\bwith lana\b.*\b(problem|issue|slow|confusing|unclear|wrong|broken|stuck|bad)\b/,
+    /\blana\b.*\b(is|was|feels|seems|keeps|takes|gave|gives|did|does|has)\b/,
+  ];
+
+  return lanaProblemPatterns.some((pattern) => pattern.test(currentLower));
+}
+
+function detectHistoricalUserAgent(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    if (!item || item.role !== 'user' || typeof item.text !== 'string') continue;
+
+    const lower = normalize(item.text);
+
+    if (currentMessageClearlyTargetsLana(lower)) return 'Lana';
+    if (includesAny(lower, ['chanelle'])) return 'Chanelle';
+    if (includesAny(lower, ['sofie'])) return 'Sofie';
+    if (includesAny(lower, ['mimi'])) return 'Mimi';
+    if (includesAny(lower, ['agents', 'agent'])) return 'agents';
+  }
+
+  return '';
+}
+
+function withHistoricalUserContext(complaint, history) {
+  if (complaint.agent) return complaint;
+
+  const historicalAgent = detectHistoricalUserAgent(history);
+
+  return {
+    ...complaint,
+    agent: historicalAgent || complaint.agent,
+    taskAttempted:
+      complaint.taskAttempted ||
+      (historicalAgent ? `Use ${historicalAgent} in the legal assistant app` : ''),
+  };
+}
+
+function extractComplaint(message, userConversationLower) {
+  const currentLower = normalize(message);
   let agent = '';
-  if (includesAny(combinedLower, ['chanelle'])) agent = 'Chanelle';
-  else if (includesAny(combinedLower, ['sofie'])) agent = 'Sofie';
-  else if (includesAny(combinedLower, ['mimi'])) agent = 'Mimi';
-  else if (includesAny(combinedLower, ['lana'])) agent = 'Lana';
-  else if (includesAny(combinedLower, ['agents', 'agent'])) agent = 'agents';
+
+  if (includesAny(userConversationLower, ['chanelle'])) agent = 'Chanelle';
+  else if (includesAny(userConversationLower, ['sofie'])) agent = 'Sofie';
+  else if (includesAny(userConversationLower, ['mimi'])) agent = 'Mimi';
+  else if (currentMessageClearlyTargetsLana(currentLower)) agent = 'Lana';
+  else if (includesAny(userConversationLower, ['agents', 'agent'])) agent = 'agents';
 
   const categories = [];
   const issues = [];
   const summaryBits = [];
 
-  if (includesAny(combinedLower, ['answer', 'response', 'messy', 'too long', 'unclear', 'confusing', 'doesnt make sense', "doesn't make sense"])) {
+  if (
+    includesAny(userConversationLower, [
+      'answer',
+      'response',
+      'messy',
+      'too long',
+      'unclear',
+      'confusing',
+      'doesnt make sense',
+      "doesn't make sense",
+    ])
+  ) {
     categories.push('quality of answer');
   }
 
-  if (includesAny(combinedLower, ['chanelle', 'sofie', 'mimi', 'agent behavior', 'fake', 'acted weird'])) {
+  if (includesAny(userConversationLower, ['chanelle', 'sofie', 'mimi', 'agent behavior', 'fake', 'acted weird'])) {
     categories.push('agent behavior');
   }
 
-  if (includesAny(combinedLower, ['collaboration', 'handoff', 'sofie helped', 'mimi', 'in progress', 'stuck'])) {
+  if (includesAny(userConversationLower, ['collaboration', 'handoff', 'sofie helped', 'mimi', 'in progress', 'stuck'])) {
     categories.push('collaboration flow');
   }
 
-  if (includesAny(combinedLower, ['document', 'file', 'uploaded', 'upload', 'case file', 'wrong document'])) {
+  if (includesAny(userConversationLower, ['document', 'file', 'uploaded', 'upload', 'case file', 'wrong document'])) {
     categories.push('document handling');
   }
 
-  if (includesAny(combinedLower, ['email', 'calendar', 'outlook', 'microsoft'])) {
+  if (includesAny(userConversationLower, ['email', 'calendar', 'outlook', 'microsoft'])) {
     categories.push('email/calendar behavior');
   }
 
-  if (includesAny(combinedLower, ['voice', 'microphone', 'audio', 'speak'])) {
+  if (includesAny(userConversationLower, ['voice', 'microphone', 'audio', 'speak'])) {
     categories.push('voice interaction');
   }
 
-  if (includesAny(combinedLower, ['ui', 'ux', 'screen', 'button', 'layout', 'window', 'page'])) {
+  if (includesAny(userConversationLower, ['ui', 'ux', 'screen', 'button', 'layout', 'window', 'page'])) {
     categories.push('ui/ux');
   }
 
-  if (includesAny(combinedLower, ['slow', 'speed', 'takes too long', 'delay', 'lag', 'waiting', 'performance', 'respond'])) {
+  if (includesAny(userConversationLower, ['slow', 'speed', 'takes too long', 'delay', 'lag', 'waiting', 'performance', 'respond'])) {
     categories.push('speed/performance');
   }
 
-  if (includesAny(combinedLower, ['trust', 'privacy', 'private', 'confidential', 'unsafe', 'wrong file'])) {
+  if (includesAny(userConversationLower, ['trust', 'privacy', 'private', 'confidential', 'unsafe', 'wrong file'])) {
     categories.push('trust/privacy');
   }
 
-  if (includesAny(combinedLower, ['slow', 'takes too long', 'long to respond', 'delay', 'lag', 'waiting'])) {
+  if (includesAny(userConversationLower, ['slow', 'takes too long', 'long to respond', 'delay', 'lag', 'waiting'])) {
     issues.push('slow response time');
     summaryBits.push('response time feels too slow');
   }
 
-  if (includesAny(combinedLower, ['doesnt make sense', "doesn't make sense", 'confusing', 'unclear', 'messy'])) {
+  if (includesAny(userConversationLower, ['doesnt make sense', "doesn't make sense", 'confusing', 'unclear', 'messy'])) {
     issues.push('unclear or low-quality responses');
     summaryBits.push('some responses do not make sense or feel unclear');
   }
 
-  if (includesAny(combinedLower, ['stuck', 'in progress', 'loading', 'fake'])) {
+  if (includesAny(userConversationLower, ['stuck', 'in progress', 'loading', 'fake'])) {
     issues.push('workflow feels unreliable or misleading');
     summaryBits.push('the workflow may feel misleading, stuck, or not trustworthy');
   }
 
-  if (includesAny(combinedLower, ['wrong document', 'used the wrong document', 'mixed with unrelated', 'older unrelated file'])) {
+  if (includesAny(userConversationLower, ['wrong document', 'used the wrong document', 'mixed with unrelated', 'older unrelated file'])) {
     issues.push('document mix-up risk');
     summaryBits.push('the app may be pulling the wrong or unrelated document');
   }
 
-  if (includesAny(combinedLower, ['not working', 'broken', 'fails', 'error', 'issue', 'problem'])) {
+  if (includesAny(userConversationLower, ['not working', 'broken', 'fails', 'error', 'issue', 'problem'])) {
     issues.push('general functionality problem');
     summaryBits.push('there appears to be a functionality issue');
   }
 
-  if (includesAny(combinedLower, ['missing', 'wish', 'should do', 'feature', 'could do'])) {
+  if (includesAny(userConversationLower, ['missing', 'wish', 'should do', 'feature', 'could do'])) {
     issues.push('missing capability or improvement request');
     summaryBits.push('there may be something missing or needing improvement');
   }
@@ -530,19 +548,19 @@ function extractComplaint(message, combinedLower) {
     whatHappened = issues.join('; ');
   }
 
-  if (includesAny(combinedLower, ['too long to respond', 'takes too long', 'slow'])) {
+  if (includesAny(userConversationLower, ['too long to respond', 'takes too long', 'slow'])) {
     expectedBehavior = expectedBehavior
       ? `${expectedBehavior}; faster replies`
       : 'faster replies';
   }
 
-  if (includesAny(combinedLower, ['doesnt make sense', "doesn't make sense", 'confusing', 'unclear', 'messy'])) {
+  if (includesAny(userConversationLower, ['doesnt make sense', "doesn't make sense", 'confusing', 'unclear', 'messy'])) {
     expectedBehavior = expectedBehavior
       ? `${expectedBehavior}; clearer answers`
       : 'clearer answers';
   }
 
-  const severity = inferSeverity(combinedLower, issues, categories);
+  const severity = inferSeverity(userConversationLower, issues, categories);
 
   if (message.trim()) {
     summaryBits.push(`latest user wording: "${message.trim()}"`);
@@ -560,23 +578,23 @@ function extractComplaint(message, combinedLower) {
   };
 }
 
-function inferSeverity(combinedLower, issues, categories) {
+function inferSeverity(userConversationLower, issues, categories) {
   if (
-    includesAny(combinedLower, ['privacy', 'private', 'confidential', 'wrong document', 'misleading', 'trust dropped']) ||
+    includesAny(userConversationLower, ['privacy', 'private', 'confidential', 'wrong document', 'misleading', 'trust dropped']) ||
     (categories.includes('trust/privacy') && issues.length)
   ) {
     return 'High';
   }
 
   if (
-    includesAny(combinedLower, ['broken', 'failed', 'not working', 'error']) &&
-    !includesAny(combinedLower, ['minor', 'small'])
+    includesAny(userConversationLower, ['broken', 'failed', 'not working', 'error']) &&
+    !includesAny(userConversationLower, ['minor', 'small'])
   ) {
     return 'High';
   }
 
   if (
-    includesAny(combinedLower, ['slow', 'confusing', 'unclear', 'messy', 'fake', 'stuck']) ||
+    includesAny(userConversationLower, ['slow', 'confusing', 'unclear', 'messy', 'fake', 'stuck']) ||
     issues.length >= 2
   ) {
     return 'Medium';
@@ -597,7 +615,7 @@ function makeFollowUpQuestion(complaint, clarificationCount) {
   }
 
   if (complaint.categories.includes('quality of answer') && complaint.categories.includes('speed/performance')) {
-    return 'Understood, Mr P. Did the slowness affect the first reply, the back-and-forth, or both?';
+    return 'Understood, Mr P. I have that the replies feel slow and some answers do not make sense. Would you like me to pass that to Fiker now, or is there one more detail you want to add?';
   }
 
   if (complaint.categories.includes('quality of answer')) {
@@ -619,7 +637,19 @@ function makeFollowUpQuestion(complaint, clarificationCount) {
   return '';
 }
 
-function makeFallbackClarification(complaint) {
+function makeFallbackClarification(complaint, lower, lastAssistantMessage) {
+  const lastAssistantLower = normalize(lastAssistantMessage);
+
+  if (['both', 'first reply', 'back and forth', 'back and forth only', 'yes', 'no'].includes(lower)) {
+    if (lastAssistantLower.includes('did the slowness affect the first reply the back and forth or both')) {
+      return 'Understood, Mr P. I now have that the slowness affected both the first reply and the back-and-forth. Would you like me to pass that to Fiker now?';
+    }
+
+    if (lastAssistantLower.includes('was the main problem the clarity of the answer the structure or that it missed the point')) {
+      return 'Understood, Mr P. I’ve noted that. Would you like me to pass that to Fiker now?';
+    }
+  }
+
   if (complaint.agent) {
     return `I understand, Mr P. What seems to be the main issue with ${complaint.agent}?`;
   }
