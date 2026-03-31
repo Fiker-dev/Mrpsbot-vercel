@@ -1,7 +1,11 @@
 // api/feedback.js
-// Stores Lana feedback in Vercel KV.
+// Stores Lana feedback in Vercel KV and sends email notifications.
 
 const { kv } = require('@vercel/kv');
+
+const ADMIN_EMAIL = 'fikerzabate16@gmail.com';
+const DEFAULT_USER_EMAIL = 'fikerzabate162@gmail.com';
+const DEFAULT_FROM_EMAIL = 'Mr P Feedback <onboarding@resend.dev>';
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -32,6 +36,7 @@ function normalizeFeedback(rawMessage, source) {
       summary: typeof rawMessage === 'string' ? rawMessage : 'General feedback',
       details: typeof rawMessage === 'string' ? rawMessage : 'General feedback',
       user_message: typeof rawMessage === 'string' ? rawMessage : '',
+      user_email: '',
       status: 'new',
       source: source || 'lana-chat',
     };
@@ -60,11 +65,123 @@ function normalizeFeedback(rawMessage, source) {
         : 'General feedback',
     user_message:
       typeof parsed.user_message === 'string' ? parsed.user_message.trim() : '',
+    user_email:
+      typeof parsed.user_email === 'string' ? parsed.user_email.trim() : '',
     status:
       typeof parsed.status === 'string' && parsed.status.trim()
         ? parsed.status.trim()
         : 'new',
     source: source || 'lana-chat',
+  };
+}
+
+function formatRecordText(record) {
+  return [
+    `Feedback ID: ${record.id}`,
+    `Title: ${record.title}`,
+    `Category: ${record.category}`,
+    `Priority: ${record.priority}`,
+    `Status: ${record.status}`,
+    `Source: ${record.source}`,
+    `Submitted: ${record.submitted_at}`,
+    '',
+    'Summary',
+    record.summary,
+    '',
+    'Details',
+    record.details,
+    '',
+    'User message',
+    record.user_message || '(none)',
+  ].join('\n');
+}
+
+async function sendEmail({ to, subject, text }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM || DEFAULT_FROM_EMAIL;
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'Missing RESEND_API_KEY',
+    };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      text,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: data?.message || `Email API failed with status ${response.status}`,
+      response: data,
+    };
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    id: data?.id || null,
+  };
+}
+
+async function sendFeedbackNotifications(record) {
+  const userEmail = record.user_email || DEFAULT_USER_EMAIL;
+
+  const adminText = [
+    'New Lana feedback received.',
+    '',
+    formatRecordText(record),
+  ].join('\n');
+
+  const userText = [
+    'We received your feedback.',
+    '',
+    'Summary:',
+    record.summary,
+    '',
+    'Thank you. We will review it and follow up after a fix is made.',
+    '',
+    `Reference ID: ${record.id}`,
+  ].join('\n');
+
+  const [adminResult, userResult] = await Promise.all([
+    sendEmail({
+      to: ADMIN_EMAIL,
+      subject: `New feedback: ${record.title}`,
+      text: adminText,
+    }),
+    sendEmail({
+      to: userEmail,
+      subject: 'We received your feedback',
+      text: userText,
+    }),
+  ]);
+
+  return {
+    admin: {
+      email: ADMIN_EMAIL,
+      ...adminResult,
+    },
+    user: {
+      email: userEmail,
+      ...userResult,
+    },
   };
 }
 
@@ -102,6 +219,7 @@ module.exports = async function handler(req, res) {
       summary: normalized.summary,
       details: normalized.details,
       user_message: normalized.user_message,
+      user_email: normalized.user_email || DEFAULT_USER_EMAIL,
       status: normalized.status,
       source: normalized.source,
       submitted_at: submittedAt,
@@ -121,11 +239,14 @@ module.exports = async function handler(req, res) {
     await kv.lpush('feedback_memory', JSON.stringify(record));
     await kv.ltrim('feedback_memory', 0, 99);
 
+    const notifications = await sendFeedbackNotifications(record);
+
     return res.status(200).json({
       ok: true,
       id: record.id,
       saved: true,
       storage: 'vercel-kv',
+      notifications,
     });
   } catch (error) {
     console.error('Feedback save error:', error);
