@@ -1,11 +1,12 @@
 // api/chat.js
 // Lana feedback assistant for Mr P
 // Purpose:
-// - help Mr P give clear, useful feedback about his private legal assistant app
+// - collect clear, useful feedback about the legal assistant app and the 3 agents
+// - feel calm, polished, and human rather than robotic
 // - not act as the legal assistant itself
 // - not give legal advice
 // - ask concise follow-up questions only when needed
-// - stop and submit immediately when Mr P says to pass it on
+// - stop and submit when Mr P clearly wants it sent
 // - respond naturally to greetings and small talk before moving into feedback mode
 
 module.exports = async function handler(req, res) {
@@ -58,7 +59,7 @@ module.exports = async function handler(req, res) {
       });
 
       return res.status(200).json({
-        reply: 'Understood, Mr P. I’ll pass that to Fiker now.',
+        reply: submissionReply(history),
         done: true,
         feedback,
       });
@@ -82,7 +83,7 @@ module.exports = async function handler(req, res) {
       });
 
       return res.status(200).json({
-        reply: 'Understood, Mr P. I’ll pass that to Fiker now.',
+        reply: submissionReply(history),
         done: true,
         feedback,
       });
@@ -116,7 +117,7 @@ module.exports = async function handler(req, res) {
         });
 
         return res.status(200).json({
-          reply: 'Understood, Mr P. I have enough to pass this to Fiker. Would you like me to send it now?',
+          reply: readyToSendReply(history),
           done: false,
           feedback_preview: feedbackPreview.summary,
         });
@@ -139,7 +140,7 @@ module.exports = async function handler(req, res) {
       });
 
       return res.status(200).json({
-        reply: 'Understood, Mr P. I have enough to pass this to Fiker. Would you like me to send it now?',
+        reply: readyToSendReply(history),
         done: false,
         feedback_preview: feedbackPreview.summary,
       });
@@ -177,6 +178,46 @@ function matchesAnyPattern(text, patterns) {
 
 function unique(items) {
   return [...new Set(items)];
+}
+
+function pickVariant(options, seedText = '') {
+  if (!options.length) return '';
+  let hash = 0;
+  const source = String(seedText || '');
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+  }
+  return options[hash % options.length];
+}
+
+function historySeed(history) {
+  return history
+    .map((item) => `${item?.role || ''}:${typeof item?.text === 'string' ? item.text : ''}`)
+    .join('|');
+}
+
+function submissionReply(history) {
+  return pickVariant(
+    [
+      'Got it, Mr P. I’ll send that through to Fiker now.',
+      'All right, Mr P — I’ll pass that on to Fiker now.',
+      'Thanks, Mr P. I’m sending that to Fiker now.',
+      'I’ve got it, Mr P. I’ll share that with Fiker now.',
+    ],
+    `${historySeed(history)}:submit`
+  );
+}
+
+function readyToSendReply(history) {
+  return pickVariant(
+    [
+      'I’ve got enough to share this. Would you like me to send it to Fiker now?',
+      'That gives me enough to pass it on. Should I send it to Fiker now?',
+      'I can send that through to Fiker now, if you’d like.',
+      'That’s clear enough on my side. Would you like me to share it with Fiker now?',
+    ],
+    `${historySeed(history)}:ready`
+  );
 }
 
 function getTimeGreeting() {
@@ -715,31 +756,38 @@ function makeFollowUpQuestion(complaint, clarificationCount) {
   if (clarificationCount >= 1) return '';
 
   if (complaint.categories.includes('document handling')) {
-    return 'Understood, Mr P. Was the issue that the wrong document was pulled in, or that a temporary upload was treated like a case file?';
+    return 'Was the issue that the wrong document was pulled in, or that a temporary upload was treated like a case file?';
   }
 
   if (complaint.categories.includes('collaboration flow')) {
-    return 'Understood, Mr P. Did the collaboration feel unclear because the handoff looked fake, or because the app seemed stuck or misleading?';
+    return 'Did the collaboration feel unclear because the handoff looked fake, or because the app seemed stuck or misleading?';
   }
 
   if (complaint.categories.includes('quality of answer') && complaint.categories.includes('speed/performance')) {
-    return 'Understood, Mr P. I have that the replies feel slow and some answers do not make sense. Would you like me to pass that to Fiker now, or is there one more detail you want to add?';
+    return 'I have that the replies feel slow and some answers do not make sense. Would you like me to send that to Fiker now, or is there one more detail you want included?';
   }
 
   if (complaint.categories.includes('quality of answer')) {
-    return 'Understood, Mr P. Was the main problem the clarity of the answer, the structure, or that it missed the point?';
+    return 'Was the main problem the clarity of the answer, the structure, or that it missed the point?';
   }
 
   if (complaint.categories.includes('speed/performance')) {
-    return 'Understood, Mr P. Did the slowness affect the first reply, the back-and-forth, or both?';
+    return 'Did the slowness affect the first reply, the back-and-forth, or both?';
   }
 
   if (complaint.categories.includes('trust/privacy')) {
-    return 'Understood, Mr P. Did this mainly affect your confidence in the app, your sense of privacy, or both?';
+    return 'Did this mainly affect your confidence in the app, your sense of privacy, or both?';
   }
 
   if (complaint.agent) {
-    return `Understood, Mr P. What seems to be the main issue with ${complaint.agent}?`;
+    return pickVariant(
+      [
+        `What seems to be the main issue with ${complaint.agent}?`,
+        `What felt most off about ${complaint.agent}?`,
+        `What was the main problem with ${complaint.agent}?`,
+      ],
+      complaint.agent
+    );
   }
 
   return '';
@@ -752,24 +800,38 @@ function makeFallbackClarification(complaint, lower, lastAssistantMessage) {
     didLastAssistantAskForSendConfirmation(lastAssistantMessage) &&
     userIsAddingMoreDetail(lower)
   ) {
-    return 'Understood, Mr P. I’ll wait. Please add the extra detail you want included before I send it to Fiker.';
+    return 'I’ll wait. Add the extra detail you want included before I send it on.';
   }
 
   if (['both', 'first reply', 'back and forth', 'back and forth only', 'yes', 'no'].includes(lower)) {
     if (lastAssistantLower.includes('did the slowness affect the first reply the back and forth or both')) {
-      return 'Understood, Mr P. I now have that the slowness affected both the first reply and the back-and-forth. Would you like me to pass that to Fiker now?';
+      return 'That helps. I now have that the slowness affected both the first reply and the back-and-forth. Would you like me to send that to Fiker now?';
     }
 
     if (lastAssistantLower.includes('was the main problem the clarity of the answer the structure or that it missed the point')) {
-      return 'Understood, Mr P. I’ve noted that. Would you like me to pass that to Fiker now?';
+      return 'I’ve noted that. Would you like me to send it to Fiker now?';
     }
   }
 
   if (complaint.agent) {
-    return `I understand, Mr P. What seems to be the main issue with ${complaint.agent}?`;
+    return pickVariant(
+      [
+        `What seems to be the main issue with ${complaint.agent}?`,
+        `What part of ${complaint.agent} felt wrong?`,
+        `What would you say was the main issue with ${complaint.agent}?`,
+      ],
+      `${complaint.agent}:${lower}`
+    );
   }
 
-  return 'I understand, Mr P. What part of the app are you referring to, and what felt wrong or incomplete?';
+  return pickVariant(
+    [
+      'Which part of the app are you referring to, and what felt wrong or incomplete?',
+      'What part of the app did this happen in, and what felt off?',
+      'Tell me which part of the app this relates to, and what didn’t feel right.',
+    ],
+    lower
+  );
 }
 
 function buildFeedbackSummary({
