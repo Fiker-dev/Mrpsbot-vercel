@@ -427,13 +427,22 @@ async function sendEmail({ to, subject, text, from }) {
 async function sendFeedbackNotifications(record) {
   const userEmail = record.user_email || DEFAULT_USER_EMAIL;
   const adminText = formatRecordText(record);
+  const isRepeat = /\bagain\b|\bstill\b|\brepeat(?:ed)?\b/i.test(`${record.summary}\n${record.details}\n${record.user_message}`);
+  const userSubject = isRepeat
+    ? "Lana update: I've submitted this again for another look"
+    : "Lana update: I've submitted your feedback";
+  const userIntro = isRepeat
+    ? "Lana here. I noticed this has happened again, so I've sent it back for another look."
+    : "Lana here. I've submitted your feedback.";
 
   const userText = [
-    `Confirmation: your feedback "${record.user_message || record.summary}" was received by Fiker.`,
+    userIntro,
     '',
-    'We will notify you once it gets fixed.',
+    'Feedback received:',
+    `"${record.user_message || record.summary}"`,
     '',
     `Reference ID: ${record.id}`,
+    "We will notify you once it's fixed.",
   ].join('\n');
 
   const [adminResult, userResult] = await Promise.all([
@@ -445,7 +454,7 @@ async function sendFeedbackNotifications(record) {
     }),
     sendEmail({
       to: userEmail,
-      subject: SHARED_SUBJECT,
+      subject: userSubject,
       text: userText,
       from: SHARED_FROM_EMAIL,
     }),
@@ -454,10 +463,14 @@ async function sendFeedbackNotifications(record) {
   return {
     admin: {
       email: ADMIN_EMAIL,
+      subject: SHARED_SUBJECT,
+      preview: adminText.split('\n')[0],
       ...adminResult,
     },
     user: {
       email: userEmail,
+      subject: userSubject,
+      preview: userText.split('\n')[0],
       ...userResult,
     },
   };
